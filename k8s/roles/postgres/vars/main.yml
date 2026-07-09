@@ -1,9 +1,11 @@
 ---
 postgres_image: "docker.io/library/postgres:18.4"
 postgres_user: "dedup"
-postgres_password: "{{ lookup('env', 'SIMU_DEDUP_POSTGRES_PASSWORD') | default('dedup-local-only', true) }}"
+postgres_password: "{{ lookup('env', 'SIMU_DEDUP_POSTGRES_PASSWORD') }}"
 postgres_database: "dedup"
 postgres_node_pool: "hazelcast-cluster"
+dedup_table_name: "deduplicate"
+dedup_kv_table_name: "deduplicate_kv"
 
 postgres_cpu_request: "6"
 postgres_memory_request: "24Gi"

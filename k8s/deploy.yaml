@@ -2,6 +2,6 @@
   hosts: localhost
   roles:
     - gke
-    - hz
     - postgres
+    - hz
     - chaos

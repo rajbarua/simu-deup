@@ -1,15 +1,18 @@
 apiVersion: v1
-kind: ConfigMap
+kind: Secret
 metadata:
-  name: primary-custom-config-cm
+  name: {{ hazelcast_custom_config_secret_name }}
   namespace: default
-data:
+type: Opaque
+stringData:
   hazelcast: |-
     management-center:
       scripting-enabled: true
-    map:
-      paymentsDedup:
-        backup-count: 1
-        async-backup-count: 0
-        time-to-live-seconds: 0
-        max-idle-seconds: 0
+    data-connection:
+      {{ dedup_postgres_data_connection }}:
+        type: JDBC
+        properties:
+          jdbcUrl: {{ dedup_postgres_jdbc_url }}
+          user: {{ dedup_postgres_username }}
+          password: {{ dedup_postgres_password }}
+        shared: true

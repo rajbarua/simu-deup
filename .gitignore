@@ -19,4 +19,5 @@ venv/
 /logs/
 .DS_Store
 .vscode/
-prompt*
+target/
+*.class

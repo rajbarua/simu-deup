@@ -17,7 +17,17 @@ This repo is bootstrapped for GKE-based Hazelcast Simulator experiments. The cur
 - `gcloud`, `kubectl`, and `helm`.
 - GCP credentials at `~/gcp/credentials.json`, or update `k8s/roles/gke/vars/main.yml`.
 - A public SSH key at `~/.ssh/id_ed25519.pub`, or set `SIMU_DEDUP_SSH_PUB_KEY`.
+- Postgres password in `SIMU_DEDUP_POSTGRES_PASSWORD`.
+- Hazelcast Enterprise license at `~/hazelcast/demo.license`, or set `HAZELCAST_LICENSE_KEY`.
 - Hazelcast Simulator at `/Users/raj/src/hazelcast-simulator`.
+
+## Build Test Jar
+
+```bash
+cd ~/src/simu-dedup
+mvn -DskipTests package
+scripts/install-simulator-user-lib
+```
 
 ## Deploy
 
@@ -41,6 +51,12 @@ source ../hazelcast-simulator/.venv/bin/activate
 inventory install java --hosts 'loadgenerators'
 inventory install simulator --hosts 'loadgenerators'
 perftest run chaos_tests.yaml
+```
+
+For IMap + Postgres deduplication:
+
+```bash
+perftest run imap_postgres_tests.yaml
 ```
 
 ## Chaos Experiments

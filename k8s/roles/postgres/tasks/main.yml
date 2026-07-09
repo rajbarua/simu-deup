@@ -1,4 +1,11 @@
 ---
+- name: Validate Postgres password source
+  ansible.builtin.fail:
+    msg: "Set SIMU_DEDUP_POSTGRES_PASSWORD before deploying Postgres."
+  when: postgres_password | trim | length == 0
+  tags:
+    - postgres
+
 - name: Deploy Postgres for dedup persistence
   kubernetes.core.k8s:
     state: present
@@ -21,6 +28,28 @@
         name: postgres-init-scripts
       data:
         001_schema.sql: |
+          CREATE TABLE IF NOT EXISTS {{ dedup_table_name }} (
+            id VARCHAR(256) PRIMARY KEY,
+            service_name VARCHAR(64) NOT NULL,
+            payment_id VARCHAR(200) NOT NULL,
+            first_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            last_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            seen_count BIGINT NOT NULL DEFAULT 1,
+            expires_at TIMESTAMPTZ NOT NULL
+          );
+
+          CREATE INDEX IF NOT EXISTS idx_{{ dedup_table_name }}_service_payment
+            ON {{ dedup_table_name }}(service_name, payment_id);
+          CREATE INDEX IF NOT EXISTS idx_{{ dedup_table_name }}_expires_at
+            ON {{ dedup_table_name }}(expires_at);
+          CREATE INDEX IF NOT EXISTS idx_{{ dedup_table_name }}_first_seen_at
+            ON {{ dedup_table_name }}(first_seen_at);
+
+          CREATE TABLE IF NOT EXISTS {{ dedup_kv_table_name }} (
+            id VARCHAR(256) PRIMARY KEY,
+            value VARCHAR(1024) NOT NULL
+          );
+
           CREATE TABLE IF NOT EXISTS payment_dedup (
             service_name VARCHAR(64) NOT NULL,
             payment_id VARCHAR(200) NOT NULL,
@@ -175,3 +204,75 @@
     wait_timeout: 360
   tags:
     - postgres
+
+- name: Remove previous dedup schema job
+  kubernetes.core.k8s:
+    state: absent
+    api_version: batch/v1
+    kind: Job
+    name: postgres-dedup-schema
+    namespace: default
+  tags:
+    - postgres
+    - postgres-schema
+
+- name: Apply dedup schema to existing Postgres
+  kubernetes.core.k8s:
+    state: present
+    namespace: default
+    definition: |
+      apiVersion: batch/v1
+      kind: Job
+      metadata:
+        name: postgres-dedup-schema
+        namespace: default
+      spec:
+        ttlSecondsAfterFinished: 300
+        backoffLimit: 2
+        template:
+          spec:
+            restartPolicy: Never
+            containers:
+              - name: psql
+                image: "{{ postgres_image }}"
+                imagePullPolicy: IfNotPresent
+                envFrom:
+                  - secretRef:
+                      name: postgres-auth
+                command:
+                  - /bin/sh
+                  - -lc
+                args:
+                  - |
+                    set -eu
+                    export PGPASSWORD="$POSTGRES_PASSWORD"
+                    psql -h postgres.default.svc.cluster.local -U "$POSTGRES_USER" -d "$POSTGRES_DB" -v ON_ERROR_STOP=1 <<'SQL'
+                    CREATE TABLE IF NOT EXISTS {{ dedup_table_name }} (
+                      id VARCHAR(256) PRIMARY KEY,
+                      service_name VARCHAR(64) NOT NULL,
+                      payment_id VARCHAR(200) NOT NULL,
+                      first_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                      last_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                      seen_count BIGINT NOT NULL DEFAULT 1,
+                      expires_at TIMESTAMPTZ NOT NULL
+                    );
+                    CREATE INDEX IF NOT EXISTS idx_{{ dedup_table_name }}_service_payment
+                      ON {{ dedup_table_name }}(service_name, payment_id);
+                    CREATE INDEX IF NOT EXISTS idx_{{ dedup_table_name }}_expires_at
+                      ON {{ dedup_table_name }}(expires_at);
+                    CREATE INDEX IF NOT EXISTS idx_{{ dedup_table_name }}_first_seen_at
+                      ON {{ dedup_table_name }}(first_seen_at);
+                    CREATE TABLE IF NOT EXISTS {{ dedup_kv_table_name }} (
+                      id VARCHAR(256) PRIMARY KEY,
+                      value VARCHAR(1024) NOT NULL
+                    );
+                    SQL
+  tags:
+    - postgres
+    - postgres-schema
+
+- name: Wait for dedup schema job to complete
+  ansible.builtin.shell: "kubectl wait --for=condition=complete job/postgres-dedup-schema -n default --timeout=300s"
+  tags:
+    - postgres
+    - postgres-schema

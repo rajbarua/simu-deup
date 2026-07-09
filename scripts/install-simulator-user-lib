@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+simulator_home="${SIMULATOR_HOME:-/Users/raj/src/hazelcast-simulator}"
+jar="${repo_dir}/target/simu-dedup-tests-0.1.0-SNAPSHOT.jar"
+
+if [[ ! -f "${jar}" ]]; then
+  echo "Missing ${jar}. Run: mvn -DskipTests package" >&2
+  exit 1
+fi
+
+mkdir -p "${simulator_home}/user-lib"
+cp "${jar}" "${simulator_home}/user-lib/"
+echo "Installed $(basename "${jar}") into ${simulator_home}/user-lib"

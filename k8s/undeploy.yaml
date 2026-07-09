@@ -1,8 +1,346 @@
-- name: UnDeploy Hazelcast cluster and application
+- name: Tear down Hazelcast cluster and application
   hosts: localhost
+  gather_facts: false
   vars_files:
     - roles/gke/vars/main.yml
+    - roles/hz/vars/main.yml
+  vars:
+    hazelcast_namespace: default
+    chaos_namespace: chaos-mesh
+    clc_configs:
+      - hz-primary
+      - simu-dedup-local
+    hazelcast_secret_names:
+      - hazelcast-agent-cert
+      - hazelcast-license
+      - hazelcast-mc
+      - hazelcast-ssl
+      - hz-primary
+      - mapstore-deduplicate
+      - primary-custom-config
+    hazelcast_configmap_names:
+      - hazelcast-keystore
+      - hz-primary-init
+      - primary-custom-config-cm
+      - simu-dedup-user-code
+    postgres_resource_names:
+      - { api: "batch/v1", kind: "Job", name: "postgres-dedup-schema" }
+      - { api: "apps/v1", kind: "StatefulSet", name: "postgres" }
+      - { api: "v1", kind: "Service", name: "postgres" }
+      - { api: "v1", kind: "ConfigMap", name: "postgres-init-scripts" }
+      - { api: "v1", kind: "Secret", name: "postgres-auth" }
+    default_pvc_pattern: "(data-postgres|mancenter-storage-hazelcast-mc|hz-primary|hazelcast-mc)"
+
   tasks:
+    - name: Authorize access to Google Cloud with a service account
+      ansible.builtin.shell: |
+        set -o pipefail
+        gcloud auth activate-service-account --key-file={{ credentials_file }}
+      args:
+        executable: /bin/bash
+      changed_when: false
+      tags:
+        - undeploy
+        - gke
+
+    - name: Check whether GKE cluster exists
+      ansible.builtin.shell: |
+        set -o pipefail
+        gcloud container clusters describe {{ cluster_name }} \
+          --zone {{ zone }} \
+          --project {{ project_id }} \
+          --format='value(name)'
+      args:
+        executable: /bin/bash
+      register: gke_cluster_describe
+      changed_when: false
+      failed_when: false
+      tags:
+        - undeploy
+        - gke
+        - k8s
+
+    - name: Track GKE cluster existence
+      ansible.builtin.set_fact:
+        gke_cluster_exists: "{{ gke_cluster_describe.rc == 0 }}"
+      tags:
+        - undeploy
+        - gke
+        - k8s
+
+    - name: Get the GKE cluster credentials
+      ansible.builtin.shell: |
+        set -o pipefail
+        gcloud container clusters get-credentials {{ cluster_name }} \
+          --zone {{ zone }} \
+          --project {{ project_id }}
+      args:
+        executable: /bin/bash
+      changed_when: false
+      when: gke_cluster_exists
+      tags:
+        - undeploy
+        - gke
+        - k8s
+
+    - name: Remove local CLC configs if present
+      ansible.builtin.shell: |
+        set -o pipefail
+        if command -v clc >/dev/null 2>&1; then
+          clc config delete {{ item }}
+        fi
+      args:
+        executable: /bin/bash
+      loop: "{{ clc_configs }}"
+      register: clc_remove
+      changed_when: clc_remove.rc == 0 and (clc_remove.stdout | default('') | length > 0)
+      failed_when: clc_remove.rc not in [0, 1]
+      tags:
+        - undeploy
+        - clc
+        - hz
+
+    - name: Delete Chaos Mesh experiment custom resources
+      ansible.builtin.shell: |
+        set -o pipefail
+        for kind in podchaos networkchaos stresschaos iochaos timechaos kernelchaos dnschaos httpchaos schedule workflow; do
+          kubectl delete "$kind" --all -A --ignore-not-found=true 2>/dev/null || true
+        done
+      args:
+        executable: /bin/bash
+      register: chaos_experiments_delete
+      changed_when: "'deleted' in (chaos_experiments_delete.stdout | default(''))"
+      when: gke_cluster_exists
+      tags:
+        - undeploy
+        - chaos
+        - k8s
+
+    - name: Delete Hazelcast map custom resources
+      ansible.builtin.shell: |
+        set -o pipefail
+        kubectl delete map.hazelcast.com --all \
+          -n {{ hazelcast_namespace }} \
+          --ignore-not-found=true 2>/dev/null || true
+      args:
+        executable: /bin/bash
+      register: hz_maps_delete
+      changed_when: "'deleted' in (hz_maps_delete.stdout | default(''))"
+      when: gke_cluster_exists
+      tags:
+        - undeploy
+        - hz
+        - maps
+        - k8s
+
+    - name: Delete Hazelcast Management Center custom resource
+      ansible.builtin.shell: |
+        set -o pipefail
+        kubectl delete managementcenter.hazelcast.com hazelcast-mc \
+          -n {{ hazelcast_namespace }} \
+          --ignore-not-found=true \
+          --wait=true \
+          --timeout=300s 2>/dev/null || true
+      args:
+        executable: /bin/bash
+      register: hz_mc_delete
+      changed_when: "'deleted' in (hz_mc_delete.stdout | default(''))"
+      when: gke_cluster_exists
+      tags:
+        - undeploy
+        - hz
+        - mc
+        - k8s
+
+    - name: Delete Hazelcast cluster custom resource
+      ansible.builtin.shell: |
+        set -o pipefail
+        kubectl delete hazelcast.hazelcast.com hz-primary \
+          -n {{ hazelcast_namespace }} \
+          --ignore-not-found=true \
+          --wait=true \
+          --timeout=600s 2>/dev/null || true
+      args:
+        executable: /bin/bash
+      register: hz_cluster_delete
+      changed_when: "'deleted' in (hz_cluster_delete.stdout | default(''))"
+      when: gke_cluster_exists
+      tags:
+        - undeploy
+        - hz
+        - k8s
+
+    - name: Delete Postgres resources
+      kubernetes.core.k8s:
+        state: absent
+        api_version: "{{ item.api }}"
+        kind: "{{ item.kind }}"
+        namespace: "{{ hazelcast_namespace }}"
+        name: "{{ item.name }}"
+        wait: true
+      loop: "{{ postgres_resource_names }}"
+      loop_control:
+        label: "{{ item.kind }}/{{ item.name }}"
+      when: gke_cluster_exists
+      tags:
+        - undeploy
+        - postgres
+        - k8s
+
+    - name: Delete remaining Hazelcast workloads and services
+      kubernetes.core.k8s:
+        state: absent
+        api_version: "{{ item.api }}"
+        kind: "{{ item.kind }}"
+        namespace: "{{ hazelcast_namespace }}"
+        name: "{{ item.name }}"
+        wait: true
+      loop:
+        - { api: "apps/v1", kind: "StatefulSet", name: "hz-primary" }
+        - { api: "apps/v1", kind: "StatefulSet", name: "hz-primary-lite" }
+        - { api: "apps/v1", kind: "StatefulSet", name: "hazelcast-mc" }
+        - { api: "v1", kind: "Service", name: "hz-primary" }
+        - { api: "v1", kind: "Service", name: "hazelcast-mc" }
+      loop_control:
+        label: "{{ item.kind }}/{{ item.name }}"
+      when: gke_cluster_exists
+      tags:
+        - undeploy
+        - hz
+        - mc
+        - k8s
+
+    - name: Delete Hazelcast secrets
+      kubernetes.core.k8s:
+        state: absent
+        api_version: v1
+        kind: Secret
+        namespace: "{{ hazelcast_namespace }}"
+        name: "{{ item }}"
+      loop: "{{ hazelcast_secret_names }}"
+      loop_control:
+        label: "{{ item }}"
+      when: gke_cluster_exists
+      tags:
+        - undeploy
+        - hz
+        - secrets
+        - k8s
+
+    - name: Delete Hazelcast configmaps
+      kubernetes.core.k8s:
+        state: absent
+        api_version: v1
+        kind: ConfigMap
+        namespace: "{{ hazelcast_namespace }}"
+        name: "{{ item }}"
+      loop: "{{ hazelcast_configmap_names }}"
+      loop_control:
+        label: "{{ item }}"
+      when: gke_cluster_exists
+      tags:
+        - undeploy
+        - hz
+        - k8s
+
+    - name: Gather PVCs in default namespace
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: PersistentVolumeClaim
+        namespace: "{{ hazelcast_namespace }}"
+      register: default_pvc_info
+      when: gke_cluster_exists
+      tags:
+        - undeploy
+        - pvc
+        - k8s
+
+    - name: Delete PVCs created by this deployment
+      kubernetes.core.k8s:
+        state: absent
+        api_version: v1
+        kind: PersistentVolumeClaim
+        namespace: "{{ hazelcast_namespace }}"
+        name: "{{ item.metadata.name }}"
+        wait: true
+      loop: "{{ default_pvc_info.resources | default([]) }}"
+      loop_control:
+        label: "{{ item.metadata.name }}"
+      when:
+        - gke_cluster_exists
+        - item.metadata.name is search(default_pvc_pattern)
+      tags:
+        - undeploy
+        - pvc
+        - k8s
+
+    - name: Uninstall Hazelcast operator
+      ansible.builtin.shell: |
+        set -o pipefail
+        helm uninstall hzoperator -n {{ hazelcast_namespace }} --wait
+      args:
+        executable: /bin/bash
+      register: uninstall_hzoperator
+      changed_when: uninstall_hzoperator.rc == 0
+      failed_when: >
+        (uninstall_hzoperator.rc not in [0, 1]) or
+        (uninstall_hzoperator.rc == 1 and
+         ('not found' not in (((uninstall_hzoperator.stderr | default('')) + (uninstall_hzoperator.stdout | default(''))) | lower)))
+      when: gke_cluster_exists
+      tags:
+        - undeploy
+        - hz
+        - operator
+        - k8s
+
+    - name: Uninstall Chaos Mesh
+      ansible.builtin.shell: |
+        set -o pipefail
+        helm uninstall chaos-mesh -n {{ chaos_namespace }} --wait
+      args:
+        executable: /bin/bash
+      register: uninstall_chaos
+      changed_when: uninstall_chaos.rc == 0
+      failed_when: >
+        (uninstall_chaos.rc not in [0, 1]) or
+        (uninstall_chaos.rc == 1 and
+         ('not found' not in (((uninstall_chaos.stderr | default('')) + (uninstall_chaos.stdout | default(''))) | lower)))
+      when: gke_cluster_exists
+      tags:
+        - undeploy
+        - chaos
+        - k8s
+
+    - name: Delete Chaos Mesh RBAC
+      kubernetes.core.k8s:
+        state: absent
+        api_version: rbac.authorization.k8s.io/v1
+        kind: "{{ item.kind }}"
+        name: "{{ item.name }}"
+      loop:
+        - { kind: "ClusterRoleBinding", name: "chaos-experimenter-binding" }
+        - { kind: "ClusterRole", name: "chaos-experimenter" }
+      loop_control:
+        label: "{{ item.kind }}/{{ item.name }}"
+      when: gke_cluster_exists
+      tags:
+        - undeploy
+        - chaos
+        - k8s
+
+    - name: Delete Chaos Mesh namespace
+      kubernetes.core.k8s:
+        state: absent
+        api_version: v1
+        kind: Namespace
+        name: "{{ chaos_namespace }}"
+        wait: true
+      when: gke_cluster_exists
+      tags:
+        - undeploy
+        - chaos
+        - k8s
+
     - name: Delete VMs in the VPC network
       gcp_compute_instance:
         name: "{{ client_machine_name }}-{{ item }}"
@@ -15,3 +353,86 @@
       tags:
         - undeploy
         - gke
+        - client
+
+    - name: Delete GKE cluster
+      ansible.builtin.shell: |
+        set -o pipefail
+        gcloud container clusters delete {{ cluster_name }} \
+          --zone {{ zone }} \
+          --project {{ project_id }} \
+          --quiet
+      args:
+        executable: /bin/bash
+      register: delete_cluster
+      changed_when: delete_cluster.rc == 0
+      failed_when: >
+        (delete_cluster.rc not in [0, 1]) or
+        (delete_cluster.rc == 1 and
+         ('was not found' not in (((delete_cluster.stderr | default('')) + (delete_cluster.stdout | default(''))) | lower) and
+          'not found' not in (((delete_cluster.stderr | default('')) + (delete_cluster.stdout | default(''))) | lower)))
+      tags:
+        - undeploy
+        - gke
+        - cluster
+
+    - name: Delete GKE firewall rule
+      ansible.builtin.shell: |
+        set -o pipefail
+        gcloud compute firewall-rules delete {{ cluster_name }}-simulator \
+          --project {{ project_id }} \
+          --quiet
+      args:
+        executable: /bin/bash
+      register: delete_firewall
+      changed_when: delete_firewall.rc == 0
+      failed_when: >
+        (delete_firewall.rc not in [0, 1]) or
+        (delete_firewall.rc == 1 and
+         ('was not found' not in (((delete_firewall.stderr | default('')) + (delete_firewall.stdout | default(''))) | lower) and
+          'not found' not in (((delete_firewall.stderr | default('')) + (delete_firewall.stdout | default(''))) | lower)))
+      tags:
+        - undeploy
+        - gke
+        - network
+
+    - name: Delete GKE subnet
+      ansible.builtin.shell: |
+        set -o pipefail
+        gcloud compute networks subnets delete {{ cluster_name }}-network \
+          --region {{ region }} \
+          --project {{ project_id }} \
+          --quiet
+      args:
+        executable: /bin/bash
+      register: delete_subnet
+      changed_when: delete_subnet.rc == 0
+      failed_when: >
+        (delete_subnet.rc not in [0, 1]) or
+        (delete_subnet.rc == 1 and
+         ('was not found' not in (((delete_subnet.stderr | default('')) + (delete_subnet.stdout | default(''))) | lower) and
+          'not found' not in (((delete_subnet.stderr | default('')) + (delete_subnet.stdout | default(''))) | lower)))
+      tags:
+        - undeploy
+        - gke
+        - network
+
+    - name: Delete GKE network
+      ansible.builtin.shell: |
+        set -o pipefail
+        gcloud compute networks delete {{ cluster_name }}-network \
+          --project {{ project_id }} \
+          --quiet
+      args:
+        executable: /bin/bash
+      register: delete_network
+      changed_when: delete_network.rc == 0
+      failed_when: >
+        (delete_network.rc not in [0, 1]) or
+        (delete_network.rc == 1 and
+         ('was not found' not in (((delete_network.stderr | default('')) + (delete_network.stdout | default(''))) | lower) and
+          'not found' not in (((delete_network.stderr | default('')) + (delete_network.stdout | default(''))) | lower)))
+      tags:
+        - undeploy
+        - gke
+        - network
