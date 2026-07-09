@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: primary-custom-config-cm
+  namespace: default
+data:
+  hazelcast: |-
+    management-center:
+      scripting-enabled: true
+    map:
+      paymentsDedup:
+        backup-count: 1
+        async-backup-count: 0
+        time-to-live-seconds: 0
+        max-idle-seconds: 0

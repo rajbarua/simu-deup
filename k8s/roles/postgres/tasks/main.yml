@@ -1,0 +1,177 @@
+---
+- name: Deploy Postgres for dedup persistence
+  kubernetes.core.k8s:
+    state: present
+    namespace: default
+    definition: |
+      ---
+      apiVersion: v1
+      kind: Secret
+      metadata:
+        name: postgres-auth
+      type: Opaque
+      stringData:
+        POSTGRES_USER: "{{ postgres_user }}"
+        POSTGRES_PASSWORD: "{{ postgres_password }}"
+        POSTGRES_DB: "{{ postgres_database }}"
+      ---
+      apiVersion: v1
+      kind: ConfigMap
+      metadata:
+        name: postgres-init-scripts
+      data:
+        001_schema.sql: |
+          CREATE TABLE IF NOT EXISTS payment_dedup (
+            service_name VARCHAR(64) NOT NULL,
+            payment_id VARCHAR(200) NOT NULL,
+            payload JSONB,
+            first_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            last_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            seen_count BIGINT NOT NULL DEFAULT 1,
+            expires_at TIMESTAMPTZ,
+            PRIMARY KEY (service_name, payment_id)
+          );
+
+          CREATE INDEX IF NOT EXISTS idx_payment_dedup_expires_at
+            ON payment_dedup(expires_at)
+            WHERE expires_at IS NOT NULL;
+
+          CREATE TABLE IF NOT EXISTS dedup_attempts (
+            service_name VARCHAR(64) NOT NULL,
+            payment_id VARCHAR(200) NOT NULL,
+            attempt_id BIGSERIAL PRIMARY KEY,
+            duplicate BOOLEAN NOT NULL,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+          );
+
+          CREATE INDEX IF NOT EXISTS idx_dedup_attempts_payment
+            ON dedup_attempts(service_name, payment_id, created_at);
+      ---
+      apiVersion: v1
+      kind: Service
+      metadata:
+        name: postgres
+        labels:
+          app.kubernetes.io/name: postgres
+      spec:
+        type: ClusterIP
+        ports:
+          - name: postgres
+            port: 5432
+            targetPort: 5432
+        selector:
+          app.kubernetes.io/name: postgres
+      ---
+      apiVersion: apps/v1
+      kind: StatefulSet
+      metadata:
+        name: postgres
+        labels:
+          app.kubernetes.io/name: postgres
+      spec:
+        serviceName: postgres
+        replicas: 1
+        selector:
+          matchLabels:
+            app.kubernetes.io/name: postgres
+        template:
+          metadata:
+            labels:
+              app.kubernetes.io/name: postgres
+          spec:
+            nodeSelector:
+              component: "{{ postgres_node_pool }}"
+            securityContext:
+              fsGroup: 999
+              fsGroupChangePolicy: OnRootMismatch
+            containers:
+              - name: postgres
+                image: "{{ postgres_image }}"
+                imagePullPolicy: IfNotPresent
+                ports:
+                  - containerPort: 5432
+                    name: postgres
+                envFrom:
+                  - secretRef:
+                      name: postgres-auth
+                env:
+                  - name: PGDATA
+                    value: /var/lib/postgresql/data/pgdata
+                args:
+                  - "-c"
+                  - "synchronous_commit={{ postgres_synchronous_commit }}"
+                  - "-c"
+                  - "wal_compression={{ postgres_wal_compression }}"
+                  - "-c"
+                  - "min_wal_size={{ postgres_min_wal_size }}"
+                  - "-c"
+                  - "max_wal_size={{ postgres_max_wal_size }}"
+                  - "-c"
+                  - "checkpoint_timeout={{ postgres_checkpoint_timeout }}"
+                  - "-c"
+                  - "checkpoint_completion_target={{ postgres_checkpoint_completion_target }}"
+                  - "-c"
+                  - "shared_buffers={{ postgres_shared_buffers }}"
+                  - "-c"
+                  - "maintenance_work_mem={{ postgres_maintenance_work_mem }}"
+                  - "-c"
+                  - "max_connections={{ postgres_max_connections }}"
+                readinessProbe:
+                  exec:
+                    command: ["sh", "-c", "pg_isready -U \"$POSTGRES_USER\" -d \"dbname=$POSTGRES_DB\" -h 127.0.0.1 -p 5432"]
+                  initialDelaySeconds: 5
+                  periodSeconds: 10
+                  timeoutSeconds: 5
+                  failureThreshold: 6
+                livenessProbe:
+                  exec:
+                    command: ["sh", "-c", "pg_isready -U \"$POSTGRES_USER\" -d \"dbname=$POSTGRES_DB\" -h 127.0.0.1 -p 5432"]
+                  initialDelaySeconds: 30
+                  periodSeconds: 10
+                  timeoutSeconds: 5
+                  failureThreshold: 6
+                resources:
+                  requests:
+                    cpu: "{{ postgres_cpu_request }}"
+                    memory: "{{ postgres_memory_request }}"
+                  limits:
+                    cpu: "{{ postgres_cpu_limit }}"
+                    memory: "{{ postgres_memory_limit }}"
+                volumeMounts:
+                  - name: data
+                    mountPath: /var/lib/postgresql/data
+                  - name: init-scripts
+                    mountPath: /docker-entrypoint-initdb.d
+                  - name: dshm
+                    mountPath: /dev/shm
+            volumes:
+              - name: dshm
+                emptyDir:
+                  medium: Memory
+                  sizeLimit: "{{ postgres_shm_size }}"
+              - name: init-scripts
+                configMap:
+                  name: postgres-init-scripts
+                  defaultMode: 0755
+        volumeClaimTemplates:
+          - metadata:
+              name: data
+            spec:
+              accessModes: ["ReadWriteOnce"]
+              storageClassName: "{{ postgres_storage_class }}"
+              resources:
+                requests:
+                  storage: "{{ postgres_storage_size }}"
+  tags:
+    - postgres
+
+- name: Wait for Postgres to be ready
+  kubernetes.core.k8s_info:
+    kind: Pod
+    wait: yes
+    namespace: default
+    name: postgres-0
+    wait_sleep: 10
+    wait_timeout: 360
+  tags:
+    - postgres

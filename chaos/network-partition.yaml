@@ -1,0 +1,22 @@
+apiVersion: chaos-mesh.org/v1alpha1
+kind: NetworkChaos
+metadata:
+  name: network-partition-7
+  namespace: chaos-mesh
+spec:
+  action: partition
+  mode: all #pick one Hazelcast pod to fail
+  selector:
+    namespaces:
+      - default
+    labelSelectors:
+      'chaos.node': 'normal'
+  direction: both
+  target:
+    mode: all
+    selector:
+      namespaces:
+        - default
+      labelSelectors:
+        'chaos.node': 'disrupt'      
+  duration: '30s'

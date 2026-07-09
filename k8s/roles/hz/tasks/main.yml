@@ -1,0 +1,221 @@
+---
+- name: Add helm repo of Hazelcast
+  kubernetes.core.helm_repository:
+    name: hazelcast
+    repo_url: "https://hazelcast-charts.s3.amazonaws.com/"
+    force_update: true
+  tags:
+    - hz
+    - operator
+    - hz-init
+# tasks file for k8s/roles/hz
+- name: Install Hazelcast Operator
+  shell: >
+    helm upgrade --install hzoperator hazelcast/hazelcast-platform-operator
+    --version={{ hazelcast_operator_chart_version }}
+    --set=installCRDs=true
+    --set=nodeSelector."component"="{{ mc_cluster_node_pool }}"
+  register: command_result
+  failed_when: command_result.rc >= 2
+  tags:
+    - hz
+    - operator
+    - hz-init 
+- name: Wait for operator to be ready
+  shell: "kubectl wait --for=condition=ready pod -l app.kubernetes.io/name=hazelcast-platform-operator --timeout=300s -n default"
+  tags:
+    - hz
+    - operator
+    - hz-init
+######################
+## SSL
+## https://docs.ansible.com/ansible/latest/collections/community/crypto/docsite/guide_selfsigned.html
+## https://docs.hazelcast.com/operator/latest/tls
+######################
+- name: Create private key
+  community.crypto.openssl_privatekey:
+    path: "{{ self_signed_cert_key_file }}"
+    size: 2048
+    format: pkcs8
+  tags:
+    - ssl
+- name: Create certificate signing request (CSR) for self-signed certificate
+  community.crypto.openssl_csr_pipe:
+    privatekey_path: "{{ self_signed_cert_key_file }}"
+    common_name: hazelcast.com
+    organization_name: Hazelcast
+    subject_alt_name:
+      - DNS:hazelcast.com
+      - DNS:hazelcast
+      - DNS:hazelcast.default.svc.cluster.local
+      - DNS:hz-primary
+      - DNS:hz-primary.default.svc.cluster.local
+      - DNS:hz-secondary
+      - DNS:hz-secondary.default.svc.cluster.local
+  register: csr
+  tags:
+    - ssl
+- name: Create simple self-signed certificate
+  community.crypto.x509_certificate:
+    path: "{{ self_signed_cert_cert_file }}"
+    privatekey_path: "{{ self_signed_cert_key_file }}"
+    csr_content: "{{ csr.csr }}"
+    provider: selfsigned
+  tags:
+    - ssl
+- name: Kubernetes tls secret from the certificate
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: Secret
+      metadata:
+        name: hazelcast-ssl
+        namespace: default
+      type: kubernetes.io/tls
+      data:
+        tls.crt: "{{ lookup('file', self_signed_cert_cert_file) | b64encode }}"
+        tls.key: "{{ lookup('file', self_signed_cert_key_file) | b64encode }}"
+  tags:
+      - ssl
+- name: Using java_keystore module create a keystore
+  community.general.java_keystore:
+    name: hazelcast-ssl
+    certificate: "{{ lookup('file', self_signed_cert_cert_file) }}"
+    private_key: "{{ lookup('file', self_signed_cert_key_file) }}"
+    password: hazelcast
+    dest: "{{ self_signed_cert_keystore_file }}"
+  tags:
+    - ssl
+- name: Create a ConfigMap from the keystore file
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: ConfigMap
+      metadata:
+        name: hazelcast-keystore
+        namespace: default
+      binaryData:
+        hazelcast.jks: "{{ lookup('file', self_signed_cert_keystore_file) | b64encode }}"
+  tags:
+      - ssl
+######################
+## Clusters
+######################
+- name: Custom configuration for primary Hazelcast. Used for data-connection
+  kubernetes.core.k8s:
+    state: present
+    definition: "{{ lookup('template', './templates/primary-custom-config-cm.j2') }}"
+  tags:
+    - hz-init
+    - hz-primary
+    - hz
+    - hz-platform
+- name: Install Hazelcast primary cluster
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: hazelcast.com/v1alpha1
+      kind: Hazelcast
+      metadata:
+        namespace: default
+        name: hz-primary
+      spec:
+        scheduling:
+          nodeSelector:
+            component: "{{ hz_cluster_node_pool }}"     
+        customConfigCmName: primary-custom-config-cm
+        clusterSize: "{{ primary_cluster_size }}"
+        repository: 'docker.io/hazelcast/hazelcast'
+        version: "{{ hazelcast_version }}"
+        clusterName: hz-primary
+        jet:
+          resourceUploadEnabled: true
+        userCodeDeployment:
+          clientEnabled: true
+        exposeExternally:
+          type: Smart
+          discoveryServiceType: LoadBalancer
+          memberAccess: LoadBalancer
+        resources:
+          requests:
+            cpu: "{{ hazelcast_cpu_request }}"
+            memory: "{{ hazelcast_memory_request }}"
+        jvm:
+          gc:
+            logging: true
+          args:
+            - "-Xms{{ hazelcast_jvm_heap }} -Xmx{{ hazelcast_jvm_heap }}"
+        properties:
+          "hazelcast.slow.operation.detector.enabled": "true"        
+          "hazelcast.shutdownhook.policy": "GRACEFUL"
+          #"hazelcast.heartbeat.interval.seconds": "1"
+          #"hazelcast.max.no.heartbeat.seconds": "3"
+          #"hazelcast.operation.call.timeout.millis": "3000"
+          #"hazelcast.partition.count": "647"
+  tags:
+    - hz-primary
+    - hz
+    - hz-platform
+- name: Wait for Hazelcast primary cluster to be ready
+  kubernetes.core.k8s_info:
+    kind: Pod
+    wait: yes
+    namespace: default
+    name: "hz-primary-{{ item }}"
+    wait_sleep: 10
+    wait_timeout: 360
+  loop: "{{ range( 0, primary_cluster_size)|list }}"
+  tags:
+    - hz-primary
+    - hz
+    - hz-platform
+######################
+## MC
+######################
+- name: Start management center
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: hazelcast.com/v1alpha1
+      kind: ManagementCenter
+      metadata:
+        namespace: default
+        name: hazelcast-mc
+      spec:
+        scheduling:
+          nodeSelector:
+            component: "{{ mc_cluster_node_pool }}"              
+        repository: 'docker.io/hazelcast/management-center'
+        version: "{{ hazelcast_mc_version }}"
+        externalConnectivity:
+          type: LoadBalancer
+        hazelcastClusters:
+          - address: hz-primary
+            name: hz-primary
+        persistence:
+          enabled: true
+          size: 1Gi
+        jvm:
+          args:
+          - "-Dhazelcast.mc.port=8080"
+          - "-Xms{{ management_center_jvm_heap }} -Xmx{{ management_center_jvm_heap }}"
+        resources:
+          requests:
+            cpu: "{{ management_center_cpu_request }}"
+            memory: "{{ management_center_memory_request }}"
+  tags:
+    - mc
+    - hz
+#- name: Pause for 30 secs to allow management center pod to be visible to K8S
+#  ansible.builtin.pause:
+#    seconds: 31
+#    tags:
+#      - mc
+#      - hz
+- name: Wait for management centre to be ready
+  shell: "kubectl wait --for=condition=ready pod/hazelcast-mc-0 -n default --timeout=300s"
+  tags:
+    - mc
+    - hz

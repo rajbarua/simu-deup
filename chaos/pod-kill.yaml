@@ -1,0 +1,13 @@
+apiVersion: chaos-mesh.org/v1alpha1
+kind: PodChaos
+metadata:
+  name: kill-pod
+  namespace: chaos-mesh
+spec:
+  action: pod-kill
+  mode: one #pick one Hazelcast pod to fail
+  selector:
+    namespaces:
+      - default
+    labelSelectors:
+      'app.kubernetes.io/instance': 'hz-primary' 

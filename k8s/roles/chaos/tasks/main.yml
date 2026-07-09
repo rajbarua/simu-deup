@@ -1,0 +1,78 @@
+---
+- name: Add chaos helm repository
+  kubernetes.core.helm_repository:
+    name: chaos-mesh
+    repo_url: "https://charts.chaos-mesh.org"
+    force_update: true
+  tags:
+    - chaos
+    - chaos-init
+- name: Create chaos-mesh namespace
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: Namespace
+      metadata:
+        name: chaos-mesh
+  tags:
+    - chaos
+    - chaos-init
+- name: Install Chaos Mesh for Containerd
+  shell: >
+    helm upgrade --install chaos-mesh chaos-mesh/chaos-mesh
+    -n=chaos-mesh
+    --set chaosDaemon.runtime=containerd
+    --set chaosDaemon.socketPath=/run/containerd/containerd.sock
+    --version {{ chaos_mesh_chart_version }}
+  register: command_result
+  failed_when: command_result.rc >= 2
+  tags:
+    - chaos
+    - chaos-init
+## Security is disabled. If you want to enable it, remove --set chaosDaemon.securityMode=privileged --set admissionWebhook.validateAuth=false above and add the following:
+- name: Create ClusterRole that can read pods/namespaces and create any Chaos CR
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: rbac.authorization.k8s.io/v1
+      kind: ClusterRole
+      metadata:
+        name: chaos-experimenter
+      rules:
+        - apiGroups: [""]
+          resources: ["pods", "namespaces"]
+          verbs: ["get", "list", "watch"]
+        - apiGroups: ["chaos-mesh.org"]
+          resources: ["*"]
+          verbs: ["create", "get", "list", "watch", "update", "patch", "delete"]
+  tags:
+    - chaos
+    - chaos-init
+    - chaos-security
+
+- name: Create ClusterRoleBinding that bind the role to your Google-IAM user
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: rbac.authorization.k8s.io/v1
+      kind: ClusterRoleBinding
+      metadata:
+        name: chaos-experimenter-binding
+      subjects:
+        - kind: User
+          name: "{{ user_name }}"
+      roleRef:
+        kind: ClusterRole
+        name: chaos-experimenter
+        apiGroup: rbac.authorization.k8s.io
+  tags:
+    - chaos
+    - chaos-init
+    - chaos-security
+
+- name: Wait for Chaos Mesh to be ready
+  shell: "kubectl wait --for=condition=ready pod -l app.kubernetes.io/instance=chaos-mesh --timeout=300s -n chaos-mesh"
+  tags:
+    - chaos
+    - chaos-init

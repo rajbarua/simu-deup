@@ -1,0 +1,166 @@
+---
+# tasks file for k8s/roles/gke
+- name: Create Network for GKE Cluster
+  gcp_compute_network:
+    name: "{{ cluster_name }}-network"
+    project: "{{ project_id }}"
+    auth_kind: serviceaccount
+    service_account_file: "{{ credentials_file }}"
+    auto_create_subnetworks: "false"
+    state: present
+  register: network
+  tags:
+    - network
+    - gke
+    - client
+- name: Create a subnet for GKE Cluster
+  gcp_compute_subnetwork:
+    name: "{{ cluster_name }}-network"
+    project: "{{ project_id }}"
+    auth_kind: serviceaccount
+    service_account_file: "{{ credentials_file }}"
+    region: "{{ region }}"
+    network: "{{ network }}"
+    ip_cidr_range: 172.16.0.0/16
+    state: present
+  register: subnet
+  tags:
+      - subnet
+      - network
+      - client
+      - gke
+- name: Allow SSH and Simulator ports access to the subnet
+  gcp_compute_firewall:
+    name: "{{ cluster_name }}-simulator"
+    project: "{{ project_id }}"
+    auth_kind: serviceaccount
+    service_account_file: "{{ credentials_file }}"
+    network: "{{ network }}"
+    allowed:
+    - ip_protocol: tcp
+      ports:
+      - "22"
+      - 5701-5801
+      - 9000-9001
+      - 11000-12000
+    source_ranges:
+      - "0.0.0.0/0"
+    target_tags:
+      - "simulator-access"
+    state: present
+  tags:
+    - firewall
+    - client      
+- name: Create VMs in the VPC network
+  gcp_compute_instance:
+    name: "{{ client_machine_name }}-{{ item }}"
+    # name: "client1"
+    project: "{{ project_id }}"
+    auth_kind: serviceaccount
+    service_account_file: "{{ credentials_file }}"
+    zone: "{{ zone }}"
+    machine_type: "{{ client_machine_type }}"
+    disks:
+      - boot: true
+        auto_delete: true
+        initialize_params:
+          image: "projects/ubuntu-os-cloud/global/images/family/ubuntu-2204-lts"
+    network_interfaces:
+    - network: "{{ network }}"
+      subnetwork: "{{ subnet }}"
+      access_configs:
+          - name: External NAT
+            type: ONE_TO_ONE_NAT
+    tags:
+      items:
+      - simulator-access
+    metadata:
+      ssh-keys: "{{ client_machine_username }}:{{ lookup('file', ssh_pub_key_path ) }}"
+    state: present
+  loop: "{{ range(1, max_clients + 1) | list }}"
+  vars:
+    max_clients: "{{ client_machine_count }}"
+  tags:
+  - client
+  - vm
+- name: Create the GKE cluster
+  gcp_container_cluster:
+    name: "{{ cluster_name }}"
+    project: "{{ project_id }}"
+    resource_labels:
+      keep: 1d
+    auth_kind: serviceaccount
+    service_account_file: "{{ credentials_file }}"
+    zone: "{{ zone }}"
+    network: "{{ cluster_name }}-network"
+    subnetwork: "{{ cluster_name }}-network"
+    initial_node_count: "1"
+    #-- will specify node-pools separately
+    #initial_node_count: "{{ initial_node_count }}"
+    #node_config:
+    #  machine_type: "{{ node_machine_type }}"
+    #  disk_size_gb: "{{ disk_size_gb }}"
+    #  disk_type: "{{ disk_type }}"
+    state: present
+  register: cluster
+  tags:
+    - cluster
+    - gke
+
+- name: Create the GKE cluster node pool
+  gcp_container_node_pool:
+    name: "{{ cluster_name }}-node-pool"
+    project: "{{ project_id }}"
+    auth_kind: serviceaccount
+    service_account_file: "{{ credentials_file }}"
+    zone: "{{ zone }}"
+    cluster: "{{ cluster }}"
+    config:
+      machine_type: "{{ node_machine_type }}"
+      disk_size_gb: "{{ disk_size_gb }}"
+      disk_type: "{{ disk_type }}"
+      labels:
+        component: "hazelcast-cluster"  
+    initial_node_count: "{{ initial_node_count }}"
+    state: present
+  register: node_pool
+  tags:
+    - gke
+
+- name: Create the MC node pool
+  gcp_container_node_pool:
+    name: "mc-node-pool"
+    project: "{{ project_id }}"
+    auth_kind: serviceaccount
+    service_account_file: "{{ credentials_file }}"
+    zone: "{{ zone }}"
+    cluster: "{{ cluster }}"
+    config:
+      machine_type: "{{ mc_machine_type }}"
+      disk_size_gb: "{{ disk_size_gb }}"
+      disk_type: "{{ disk_type }}"
+      labels:
+          component: "management-center"    
+    initial_node_count: "1"
+    state: present
+  register: node_pool
+  tags:
+    - gke
+
+- name: authorize access to Google Cloud with a service account
+  shell: "gcloud auth activate-service-account --key-file={{ credentials_file }}"
+  tags:
+    - gke
+
+- name: Get the GKE cluster credentials using gcloud and shell
+  #https://cloud.google.com/kubernetes-engine/docs/how-to/cluster-access-for-kubectl
+  shell: "gcloud container clusters get-credentials {{ cluster_name }} --zone {{ zone }} --project {{ project_id }}"
+  args:
+    executable: /bin/bash
+  tags:
+    - gke
+- name: configure Docker to use the Google Cloud CLI to authenticate requests to Artifact Registry
+  #https://cloud.google.com/artifact-registry/docs/docker/store-docker-container-images#linux
+  shell: "gcloud auth configure-docker {{ region }}-docker.pkg.dev"
+  tags:
+    - gke

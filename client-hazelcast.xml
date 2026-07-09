@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<hazelcast-client
+        xsi:schemaLocation="http://www.hazelcast.com/schema/client-config
+            http://www.hazelcast.com/schema/config/hazelcast-client-config-5.7.xsd"
+        xmlns="http://www.hazelcast.com/schema/client-config"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+
+    <cluster-name>hz-primary</cluster-name>
+
+    <network>
+        <cluster-members>
+            <address>127.0.0.1</address>
+        </cluster-members>
+        <!-- write operations are idempotent, set redo to true -->
+        <redo-operation>true</redo-operation>
+    </network>
+
+    <properties>
+        <property name="hazelcast.logging.type">log4j2</property>
+        <!-- set client heartbeat timeout to be slightly longer than member heartbeat timeout -->
+        <property name="hazelcast.client.heartbeat.interval">1000</property>
+        <property name="hazelcast.client.heartbeat.timeout">5000</property>
+        <!-- reduce retry timeout from 120 to 1 sec -->
+        <property name="hazelcast.client.invocation.retry.pause.millis">100</property>
+        <property name="hazelcast.client.invocation.timeout.seconds">5</property>
+        <property name="hazelcast.client.operation.backup.timeout.millis">100</property>
+    </properties>
+
+    <!-- client reconnect keeps node failure tests from aborting on a transient connection error -->
+    <connection-strategy async-start="false" reconnect-mode="ON">
+        <connection-retry>
+            <initial-backoff-millis>200</initial-backoff-millis>
+            <max-backoff-millis>10000</max-backoff-millis>
+            <multiplier>1.5</multiplier>
+            <cluster-connect-timeout-millis>30000</cluster-connect-timeout-millis>
+            <jitter>0.2</jitter>
+        </connection-retry>
+    </connection-strategy>
+
+</hazelcast-client>

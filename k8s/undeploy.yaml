@@ -1,0 +1,17 @@
+- name: UnDeploy Hazelcast cluster and application
+  hosts: localhost
+  vars_files:
+    - roles/gke/vars/main.yml
+  tasks:
+    - name: Delete VMs in the VPC network
+      gcp_compute_instance:
+        name: "{{ client_machine_name }}-{{ item }}"
+        project: "{{ project_id }}"
+        auth_kind: serviceaccount
+        service_account_file: "{{ credentials_file }}"
+        zone: "{{ zone }}"
+        state: absent
+      loop: "{{ range(1, client_machine_count + 1) | list }}"
+      tags:
+        - undeploy
+        - gke

@@ -1,0 +1,23 @@
+---
+# vars file for k8s/roles/gke
+zone: asia-south1-a
+region: asia-south1
+location: asia
+project_id: solution-architects-415712
+gcloud_sa_path: "gcp/credentials.json"
+credentials_file: "{{ lookup('env','HOME') }}/{{ gcloud_sa_path }}"
+repository_id: "rajbarua-docker"
+
+
+# use the section below to enter k8s cluster related information
+cluster_name: raj-dedup-test
+initial_node_count: 4
+disk_size_gb: 20
+disk_type: pd-ssd
+node_machine_type: c2-standard-8
+mc_machine_type: c2-standard-4
+client_machine_type: c2-standard-4
+client_machine_name: raj-dedup-client
+client_machine_count: 2
+client_machine_username: ubuntu
+ssh_pub_key_path: "{{ lookup('env','SIMU_DEDUP_SSH_PUB_KEY') | default(lookup('env','HOME') + '/.ssh/id_ed25519.pub', true) }}"
