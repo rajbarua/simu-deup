@@ -28,53 +28,18 @@
         name: postgres-init-scripts
       data:
         001_schema.sql: |
+          DROP TABLE IF EXISTS deduplicate_kv;
+          DROP TABLE IF EXISTS payment_dedup;
+          DROP TABLE IF EXISTS dedup_attempts;
+
           CREATE TABLE IF NOT EXISTS {{ dedup_table_name }} (
-            id VARCHAR(256) PRIMARY KEY,
-            service_name VARCHAR(64) NOT NULL,
-            payment_id VARCHAR(200) NOT NULL,
-            first_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-            last_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-            seen_count BIGINT NOT NULL DEFAULT 1,
-            expires_at TIMESTAMPTZ NOT NULL
+            id VARCHAR(200) PRIMARY KEY,
+            payload JSONB NOT NULL,
+            expirationTime BIGINT NOT NULL
           );
 
-          CREATE INDEX IF NOT EXISTS idx_{{ dedup_table_name }}_service_payment
-            ON {{ dedup_table_name }}(service_name, payment_id);
-          CREATE INDEX IF NOT EXISTS idx_{{ dedup_table_name }}_expires_at
-            ON {{ dedup_table_name }}(expires_at);
-          CREATE INDEX IF NOT EXISTS idx_{{ dedup_table_name }}_first_seen_at
-            ON {{ dedup_table_name }}(first_seen_at);
-
-          CREATE TABLE IF NOT EXISTS {{ dedup_kv_table_name }} (
-            id VARCHAR(256) PRIMARY KEY,
-            value VARCHAR(1024) NOT NULL
-          );
-
-          CREATE TABLE IF NOT EXISTS payment_dedup (
-            service_name VARCHAR(64) NOT NULL,
-            payment_id VARCHAR(200) NOT NULL,
-            payload JSONB,
-            first_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-            last_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-            seen_count BIGINT NOT NULL DEFAULT 1,
-            expires_at TIMESTAMPTZ,
-            PRIMARY KEY (service_name, payment_id)
-          );
-
-          CREATE INDEX IF NOT EXISTS idx_payment_dedup_expires_at
-            ON payment_dedup(expires_at)
-            WHERE expires_at IS NOT NULL;
-
-          CREATE TABLE IF NOT EXISTS dedup_attempts (
-            service_name VARCHAR(64) NOT NULL,
-            payment_id VARCHAR(200) NOT NULL,
-            attempt_id BIGSERIAL PRIMARY KEY,
-            duplicate BOOLEAN NOT NULL,
-            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-          );
-
-          CREATE INDEX IF NOT EXISTS idx_dedup_attempts_payment
-            ON dedup_attempts(service_name, payment_id, created_at);
+          CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_{{ dedup_table_name }}_expirationTime
+            ON {{ dedup_table_name }}(expirationTime);
       ---
       apiVersion: v1
       kind: Service
@@ -247,25 +212,34 @@
                     set -eu
                     export PGPASSWORD="$POSTGRES_PASSWORD"
                     psql -h postgres.default.svc.cluster.local -U "$POSTGRES_USER" -d "$POSTGRES_DB" -v ON_ERROR_STOP=1 <<'SQL'
+                    DROP TABLE IF EXISTS deduplicate_kv;
+                    DROP TABLE IF EXISTS payment_dedup;
+                    DROP TABLE IF EXISTS dedup_attempts;
+
                     CREATE TABLE IF NOT EXISTS {{ dedup_table_name }} (
-                      id VARCHAR(256) PRIMARY KEY,
-                      service_name VARCHAR(64) NOT NULL,
-                      payment_id VARCHAR(200) NOT NULL,
-                      first_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-                      last_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-                      seen_count BIGINT NOT NULL DEFAULT 1,
-                      expires_at TIMESTAMPTZ NOT NULL
+                      id VARCHAR(200) PRIMARY KEY
                     );
-                    CREATE INDEX IF NOT EXISTS idx_{{ dedup_table_name }}_service_payment
-                      ON {{ dedup_table_name }}(service_name, payment_id);
-                    CREATE INDEX IF NOT EXISTS idx_{{ dedup_table_name }}_expires_at
-                      ON {{ dedup_table_name }}(expires_at);
-                    CREATE INDEX IF NOT EXISTS idx_{{ dedup_table_name }}_first_seen_at
-                      ON {{ dedup_table_name }}(first_seen_at);
-                    CREATE TABLE IF NOT EXISTS {{ dedup_kv_table_name }} (
-                      id VARCHAR(256) PRIMARY KEY,
-                      value VARCHAR(1024) NOT NULL
-                    );
+                    ALTER TABLE {{ dedup_table_name }}
+                      ADD COLUMN IF NOT EXISTS payload JSONB,
+                      ADD COLUMN IF NOT EXISTS expirationTime BIGINT;
+                    UPDATE {{ dedup_table_name }}
+                      SET payload = to_jsonb(id)
+                      WHERE payload IS NULL;
+                    UPDATE {{ dedup_table_name }}
+                      SET expirationTime = ((EXTRACT(epoch FROM current_timestamp) * 1000)::bigint + ({{ dedup_map_ttl_seconds | int }} * 1000))
+                      WHERE expirationTime IS NULL;
+                    ALTER TABLE {{ dedup_table_name }}
+                      ALTER COLUMN id TYPE VARCHAR(200),
+                      ALTER COLUMN payload SET NOT NULL,
+                      ALTER COLUMN expirationTime SET NOT NULL,
+                      DROP COLUMN IF EXISTS service_name,
+                      DROP COLUMN IF EXISTS payment_id,
+                      DROP COLUMN IF EXISTS first_seen_at,
+                      DROP COLUMN IF EXISTS last_seen_at,
+                      DROP COLUMN IF EXISTS seen_count,
+                      DROP COLUMN IF EXISTS expires_at;
+                    CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_{{ dedup_table_name }}_expirationTime
+                      ON {{ dedup_table_name }}(expirationTime);
                     SQL
   tags:
     - postgres

@@ -1,7 +1,6 @@
 package com.hazelcast.simudedupe.tests;
 
 import com.hazelcast.map.IMap;
-import com.hazelcast.simudedupe.DedupKey;
 import com.hazelcast.simulator.hz.HazelcastTest;
 import com.hazelcast.simulator.test.BaseThreadState;
 import com.hazelcast.simulator.test.annotations.Setup;
@@ -14,19 +13,16 @@ public class DedupPutIfAbsentTest extends HazelcastTest {
     public long existingKeyDomain = 1_000_000_000L;
     public long existingStartId = 0L;
     public int duplicatePercentage = 50;
-    public String paymentIdPrefix = "PAY";
-    public String newPaymentIdPrefix = "NEWPAY";
-    public String services = "UPI";
+    public String existingIdPrefix = "PAY";
+    public String newIdPrefix = "NEWPAY";
 
     private IMap<String, String> map;
-    private String[] serviceNames;
     private final LongAdder accepted = new LongAdder();
     private final LongAdder duplicates = new LongAdder();
 
     @Setup
     public void setup() {
         map = targetInstance.getMap(name);
-        serviceNames = splitServices(services);
     }
 
     @TimeStep
@@ -48,17 +44,12 @@ public class DedupPutIfAbsentTest extends HazelcastTest {
 
     private String existingKey(ThreadState state) {
         long id = existingStartId + state.randomLong(existingKeyDomain);
-        return DedupKey.key(serviceFor(id), paymentIdPrefix + id);
+        return existingIdPrefix + id;
     }
 
     private String newKey(ThreadState state) {
         long sequence = state.nextSequence++;
-        String paymentId = newPaymentIdPrefix + "-" + state.workerId + "-" + state.threadId + "-" + sequence;
-        return DedupKey.key(serviceFor(sequence), paymentId);
-    }
-
-    private String serviceFor(long id) {
-        return serviceNames[(int) Math.floorMod(id, serviceNames.length)];
+        return newIdPrefix + "-" + state.workerId + "-" + state.threadId + "-" + sequence;
     }
 
     private String resolveWorkerId() {
@@ -75,15 +66,6 @@ public class DedupPutIfAbsentTest extends HazelcastTest {
             return "W" + workerIndex;
         }
         return "unknown";
-    }
-
-    private static String[] splitServices(String services) {
-        String[] raw = services.split(",");
-        String[] result = new String[raw.length];
-        for (int i = 0; i < raw.length; i++) {
-            result[i] = DedupKey.normalizeService(raw[i]);
-        }
-        return result;
     }
 
     public class ThreadState extends BaseThreadState {

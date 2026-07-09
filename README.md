@@ -76,16 +76,9 @@ Available starter manifests:
 
 ## Cleanup
 
-Delete Kubernetes workloads first so external load balancers are released:
-
-```bash
-kubectl delete all --all
-```
-
-Then remove client VMs:
-
 ```bash
 ansible-playbook k8s/undeploy.yaml --tags="undeploy,gke"
 ```
 
-Delete the GKE cluster from GCP when the run is complete.
+The undeploy playbook removes Kubernetes workloads, Helm releases, PVCs, client VMs, the
+GKE cluster, firewall rule, subnet, and VPC network.

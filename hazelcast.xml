@@ -24,7 +24,7 @@
         <property name="hazelcast.logging.type">log4j2</property>
     </properties>
 
-    <map name="paymentsDedup">
+    <map name="deduplicate">
         <in-memory-format>BINARY</in-memory-format>
     </map>
 </hazelcast>

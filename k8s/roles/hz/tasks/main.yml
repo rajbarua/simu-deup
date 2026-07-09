@@ -93,6 +93,7 @@
   tags:
     - hz
     - hz-init
+    - hz-primary
     - maps
 
 - name: Validate Simulator dedup user-code jar
@@ -102,6 +103,7 @@
   tags:
     - hz
     - hz-init
+    - hz-primary
     - maps
 
 - name: Read Simulator dedup user-code jar
@@ -111,6 +113,7 @@
   tags:
     - hz
     - hz-init
+    - hz-primary
     - maps
 
 - name: Create ConfigMap for Simulator dedup user-code jar
@@ -127,6 +130,7 @@
   tags:
     - hz
     - hz-init
+    - hz-primary
     - maps
 ######################
 ## SSL
@@ -241,6 +245,11 @@
         clusterName: hz-primary
         jet:
           resourceUploadEnabled: true
+        userCodeDeployment:
+          clientEnabled: true
+          configMaps:
+            - "{{ simu_dedup_user_code_config_map }}"
+          triggerSequence: "{{ simu_dedup_user_code.content | hash('sha256') }}"
         resources:
           requests:
             cpu: "{{ hazelcast_cpu_request }}"
@@ -303,12 +312,10 @@
         namespace: default
       type: Opaque
       stringData:
-        data-connection-ref: "{{ dedup_postgres_data_connection }}"
-        external-name: "{{ dedup_kv_table_name }}"
-        id-column: "id"
-        columns: "value"
-        single-column-as-value: "true"
-        load-all-keys: "false"
+        tableName: "{{ dedup_table_name }}"
+        connectionName: "{{ dedup_postgres_data_connection }}"
+        batchSize: "{{ dedup_mapstore_batch_size }}"
+        ttlSeconds: "{{ dedup_map_ttl_seconds }}"
   no_log: true
   tags:
     - hz
@@ -327,10 +334,10 @@
         hazelcastResourceName: hz-primary
         backupCount: 1
         inMemoryFormat: BINARY
-        timeToLiveSeconds: 31622400
+        timeToLiveSeconds: "{{ dedup_map_ttl_seconds | int }}"
         mapStore:
-          className: com.hazelcast.mapstore.GenericMapStore
-          initialMode: LAZY
+          className: com.hazelcast.simudedupe.store.TransactionDeduplicationMapStore
+          initialMode: EAGER
           writeDelaySeconds: 1
           writeBatchSize: "{{ dedup_mapstore_batch_size | int }}"
           writeCoalescing: true

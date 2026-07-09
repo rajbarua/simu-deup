@@ -2,7 +2,6 @@ package com.hazelcast.simudedupe.tests;
 
 import com.hazelcast.cp.IAtomicLong;
 import com.hazelcast.map.IMap;
-import com.hazelcast.simudedupe.DedupKey;
 import com.hazelcast.simulator.hz.HazelcastTest;
 import com.hazelcast.simulator.test.annotations.Prepare;
 import com.hazelcast.simulator.test.annotations.Setup;
@@ -17,18 +16,15 @@ public class DedupLoadTest extends HazelcastTest {
     public long claimSize = 100_000L;
     public long progressLogInterval = 5_000_000L;
     public int firstSeenSpreadDays = 365;
-    public String paymentIdPrefix = "PAY";
-    public String services = "UPI";
+    public String idPrefix = "PAY";
 
     private IMap<String, String> map;
-    private String[] serviceNames;
     private IAtomicLong loadCursor;
     private IAtomicLong loadedCount;
 
     @Setup
     public void setup() {
         map = targetInstance.getMap(name);
-        serviceNames = splitServices(services);
         loadCursor = getAtomicLong(testContext.getTestId() + "-" + name + "-loadCursor");
         loadedCount = getAtomicLong(testContext.getTestId() + "-" + name + "-loadedCount");
     }
@@ -73,16 +69,6 @@ public class DedupLoadTest extends HazelcastTest {
     }
 
     private String keyFor(long id) {
-        String service = serviceNames[(int) Math.floorMod(id, serviceNames.length)];
-        return DedupKey.key(service, paymentIdPrefix + id);
-    }
-
-    private static String[] splitServices(String services) {
-        String[] raw = services.split(",");
-        String[] result = new String[raw.length];
-        for (int i = 0; i < raw.length; i++) {
-            result[i] = DedupKey.normalizeService(raw[i]);
-        }
-        return result;
+        return idPrefix + id;
     }
 }
