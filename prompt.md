@@ -40,6 +40,28 @@ For the current experiment, test against 1,000,000 existing 24-digit payment IDs
 
 Once data load is done, we should have 5 min tests putIfAbsent. As of now no chaos, just simple tests. Throughput should be limited to 10K
 
+The AP map uses Hazelcast native memory. The current three-member sizing is an
+8 GiB JVM heap plus a 4 GiB pooled native-memory region inside a 16 GiB member
+container. For the 1M baseline with one backup, including conservative
+serialized-data, allocator, and record-metadata allowances, this is well within
+the available native-memory capacity.
+
+### Deduplication via CPMap (initial no-chaos test done)
+
+CP is enabled with persistence on the same Hazelcast deployment used by AP and
+Jet; there is no separate CP deployment playbook. Each member has a 50 GiB
+persistent volume. AP and CP deduplication data are not tested concurrently.
+
+The custom CPMap Simulator test populates its own 1M existing 24-digit IDs in
+parallel during Prepare, then runs the same 10K TPS, five-minute
+`putIfAbsent` mix. `cpGroupCount` controls the number of CPMap shards. Population
+and test operations both choose the shard with
+`floorMod(key.hashCode(), cpGroupCount)`, so a payment ID always reaches the
+same CP group. Three groups are used by default, keeping the estimated logical
+data comfortably below the default 100 MB CPMap limit per shard. Existing hot
+keys and group indexes are precomputed; new 24-digit keys use thread-local
+buffers so key generation is not a material part of timed execution.
+
 ## Execution
 
 I may list many things below. You can create agents and ensure that goal is met. You should execute in stages and use agents if parallel work can be done. Do not add unnecessary abstractions. Keep it simple and straight forward. I will be available to answer questions and provide guidance. You can also use the original projects for reference.

@@ -23,7 +23,7 @@ domain discriminator in the key or table schema.
 - `gcloud`, `kubectl`, and `helm`.
 - GCP credentials at `~/gcp/credentials.json`, or update `k8s/roles/gke/vars/main.yml`.
 - A public SSH key at `~/.ssh/id_ed25519.pub`, or set `SIMU_DEDUP_SSH_PUB_KEY`.
-- Postgres password in `SIMU_DEDUP_POSTGRES_PASSWORD`.
+- Postgres password in `SIMU_DEDUP_POSTGRES_PASSWORD` for AP/Jet deployments.
 - Hazelcast Enterprise license at `~/hazelcast/demo.license`, or set `HAZELCAST_LICENSE_KEY`.
 - Hazelcast Simulator at `/Users/raj/src/hazelcast-simulator`.
 
@@ -37,10 +37,29 @@ scripts/install-simulator-user-lib
 
 ## Deploy
 
+The same playbook provisions the cluster for AP, CP, and later Jet tests. CP is
+enabled with persistence in every mode so switching workloads does not require
+a second cluster definition. Select the data path with `dedup_test_mode`:
+
 ```bash
 cd ~/src/simu-dedup
-ansible-playbook k8s/deploy.yaml --tags="gke,client,hz,postgres,chaos"
+
+# IMap + Postgres
+ansible-playbook k8s/deploy.yaml \
+  -e dedup_test_mode=ap \
+  --tags="gke,client,hz,postgres,chaos"
+
+# CPMap only: no Postgres or MapStore resource
+ansible-playbook k8s/deploy.yaml \
+  -e dedup_test_mode=cp \
+  --tags="gke,client,hz,chaos"
 ```
+
+The three Hazelcast members each request 16 GiB, with an 8 GiB heap and a
+4 GiB pooled native-memory region. The AP `deduplicate` IMap uses `NATIVE`
+storage. CP persistence uses a 50 GiB `premium-rwo` volume per member. Do not
+run the AP and CP deduplication scenarios concurrently; the CP test destroys an
+already-created AP IMap before it starts its CP population.
 
 After Postgres becomes Ready, a one-shot Kubernetes Job bulk-generates
 1,000,000 fixed-width, 24-digit baseline IDs
@@ -48,8 +67,7 @@ After Postgres becomes Ready, a one-shot Kubernetes Job bulk-generates
 directly inside Postgres. Their first-seen values are distributed over the
 previous 365 days and expire 366 days after first-seen. The playbook waits for
 the Job to verify every seed ID before creating Hazelcast, so its EAGER
-MapStore cannot start against a partial baseline. No GCS dataset is used for
-this deterministic 1M-row seed.
+MapStore cannot start against a partial baseline.
 
 To change the baseline, override `dedup_seed_record_count`,
 `dedup_seed_start_id`, or `dedup_seed_id_prefix` as Ansible extra variables.
@@ -90,6 +108,56 @@ does not overlap an earlier run. Each Simulator client builds only the
 configured existing-key sample during setup, and the timed path uses a random
 array lookup. New keys use a private character buffer per test thread and do
 not use shared counters or formatting utilities.
+
+For CPMap deduplication:
+
+```bash
+perftest run cpmap_tests.yaml
+```
+
+The custom test clears its CPMaps, then all Simulator clients populate the 1M
+existing IDs in parallel during `Prepare`. A CP-backed claim cursor prevents
+overlapping work. `cpGroupCount` creates that many CPMaps in distinct CP groups,
+and both population and timed traffic route a key with
+`floorMod(key.hashCode(), cpGroupCount)`. The default is three groups. Treat
+the group count as part of the data layout: changing it requires repopulation.
+
+`existingKeySampleSize` and `existingKeyPercentage` have the same meaning as in
+the AP test. Existing keys and their group indexes are precomputed as a small
+hot set. Each new key is generated from a thread-local 24-character buffer and
+only its hash is calculated on the timed path. Increase `newKeyRunId` for every
+retained-state run, especially after an interrupted population.
+
+## Data Sizing
+
+Hazelcast 5.7 serialization produced a 36-byte serialized 24-digit String key
+and a 25-byte serialized timestamp String value in a local sizing check. These
+figures exclude record metadata and allocator overhead, so the deployment uses
+conservative headroom:
+
+| Workload state | Estimated data size |
+| --- | ---: |
+| AP, 1M baseline, one backup | less than about 100 MiB per member |
+| AP after 5 minutes at 10K TPS and 50% new keys | less than about 300 MiB per member |
+| CP, 1M baseline over three groups | about 19.4 MiB per CPMap |
+| CP after the default workload, about 2.5M total keys | about 48.5 MiB per CPMap |
+
+The 4 GiB native-memory region therefore has substantial room for the 1M AP
+baseline and the default workload. CPMap defaults to a 100 MB maximum and has
+an absolute supported maximum of 2,000 MB, so the three-group default remains
+below the conservative 100 MB setting without raising it. On this three-member
+cluster every three-member CP group is replicated to the same three members;
+more groups split the CPMap size and distribute Raft leadership/work, but do
+not reduce aggregate per-member storage. Validate these estimates with member
+native-memory, heap, and CP persistence metrics during the first real run.
+
+Relevant Hazelcast guidance:
+
+- [CP Subsystem with the Platform Operator](https://docs.hazelcast.com/operator/5.18/cp-subsystem)
+- [CP Subsystem configuration and CP groups](https://docs.hazelcast.com/hazelcast/5.7/cp-subsystem/configuration)
+- [CPMap configuration and size limits](https://docs.hazelcast.com/hazelcast/5.7/data-structures/cpmap)
+- [Native in-memory format](https://docs.hazelcast.com/hazelcast/5.7/data-structures/setting-data-format)
+- [High-density memory configuration](https://docs.hazelcast.com/hazelcast/5.7/storage/high-density-memory)
 
 ## Chaos Experiments
 

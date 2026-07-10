@@ -243,6 +243,12 @@
         version: "{{ hazelcast_version }}"
         licenseKeySecretName: "{{ hazelcast_license_secret_name }}"
         clusterName: hz-primary
+        cpSubsystem:
+          dataLoadTimeoutSeconds: "{{ cp_data_load_timeout_seconds | int }}"
+          pvc:
+            accessModes: ["ReadWriteOnce"]
+            requestStorage: "{{ cp_persistence_storage_size }}"
+            storageClassName: "{{ cp_persistence_storage_class }}"
         jet:
           resourceUploadEnabled: true
         exposeExternally:
@@ -258,6 +264,11 @@
           requests:
             cpu: "{{ hazelcast_cpu_request }}"
             memory: "{{ hazelcast_memory_request }}"
+          limits:
+            memory: "{{ hazelcast_memory_limit }}"
+        nativeMemory:
+          allocatorType: POOLED
+          size: "{{ hazelcast_native_memory_size }}"
         jvm:
           gc:
             logging: true
@@ -300,7 +311,9 @@
 - name: Validate deduplicate MapStore password source
   ansible.builtin.fail:
     msg: "Set SIMU_DEDUP_POSTGRES_PASSWORD before creating the deduplicate MapStore secret."
-  when: dedup_postgres_password | trim | length == 0
+  when:
+    - dedup_test_mode != 'cp'
+    - dedup_postgres_password | trim | length == 0
   tags:
     - hz
     - maps
@@ -321,6 +334,7 @@
         batchSize: "{{ dedup_mapstore_batch_size }}"
         ttlSeconds: "{{ dedup_map_ttl_seconds }}"
   no_log: true
+  when: dedup_test_mode != 'cp'
   tags:
     - hz
     - maps
@@ -337,7 +351,7 @@
       spec:
         hazelcastResourceName: hz-primary
         backupCount: 1
-        inMemoryFormat: BINARY
+        inMemoryFormat: NATIVE
         timeToLiveSeconds: "{{ dedup_map_ttl_seconds | int }}"
         mapStore:
           className: com.hazelcast.simudedupe.store.TransactionDeduplicationMapStore
@@ -349,6 +363,7 @@
   tags:
     - hz
     - maps
+  when: dedup_test_mode != 'cp'
 ######################
 ## MC
 ######################

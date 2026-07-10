@@ -1,0 +1,5 @@
+---
+# Selects which data path is provisioned by the shared deployment playbook.
+# CP is enabled on the Hazelcast cluster in every mode, but Postgres and the
+# MapStore-backed AP map are not created for a CP-only experiment.
+dedup_test_mode: "ap"

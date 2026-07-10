@@ -1,7 +1,18 @@
 - name: Deploy Hazelcast cluster and application
   hosts: localhost
+  vars_files:
+    - vars/main.yml
+  pre_tasks:
+    - name: Validate dedup test mode
+      ansible.builtin.assert:
+        that:
+          - dedup_test_mode in ['ap', 'cp', 'jet']
+        fail_msg: "dedup_test_mode must be ap, cp, or jet."
+      tags:
+        - always
   roles:
     - gke
-    - postgres
+    - role: postgres
+      when: dedup_test_mode != 'cp'
     - hz
     - chaos
