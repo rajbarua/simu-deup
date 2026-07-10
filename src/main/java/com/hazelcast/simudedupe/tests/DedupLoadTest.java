@@ -11,12 +11,12 @@ import com.hazelcast.simulator.worker.loadsupport.Streamer;
 import com.hazelcast.simulator.worker.loadsupport.StreamerFactory;
 
 public class DedupLoadTest extends HazelcastTest {
-    public long entryCount = 1_000_000_000L;
+    public long entryCount = 1_000_000L;
     public long startId = 0L;
     public long claimSize = 100_000L;
-    public long progressLogInterval = 5_000_000L;
+    public long progressLogInterval = 100_000L;
     public int firstSeenSpreadDays = 365;
-    public String idPrefix = "PAY";
+    public String idPrefix = "100000000000000000";
 
     private IMap<String, String> map;
     private IAtomicLong loadCursor;
@@ -45,7 +45,8 @@ public class DedupLoadTest extends HazelcastTest {
             Streamer<String, String> streamer = StreamerFactory.getInstance(map);
             for (long i = offset; i < endExclusive; i++) {
                 long id = startId + i;
-                streamer.pushEntry(keyFor(id), Long.toString(now - Math.floorMod(id, spreadMillis)));
+                long firstSeenOffset = (long) (((double) i / entryCount) * spreadMillis);
+                streamer.pushEntry(keyFor(id), Long.toString(now - firstSeenOffset));
                 workerLoaded++;
             }
             streamer.await();
@@ -69,6 +70,14 @@ public class DedupLoadTest extends HazelcastTest {
     }
 
     private String keyFor(long id) {
-        return idPrefix + id;
+        return idPrefix + zeroPadded(id, 6);
+    }
+
+    private static String zeroPadded(long value, int width) {
+        String digits = Long.toString(value);
+        if (value < 0 || digits.length() > width) {
+            throw new IllegalArgumentException("Value does not fit " + width + " digits: " + value);
+        }
+        return "0".repeat(width - digits.length()) + digits;
     }
 }

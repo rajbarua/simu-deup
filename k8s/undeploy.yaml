@@ -24,9 +24,11 @@
       - primary-custom-config-cm
       - simu-dedup-user-code
     postgres_resource_names:
+      - { api: "batch/v1", kind: "Job", name: "postgres-dedup-seed" }
       - { api: "batch/v1", kind: "Job", name: "postgres-dedup-schema" }
       - { api: "apps/v1", kind: "StatefulSet", name: "postgres" }
       - { api: "v1", kind: "Service", name: "postgres" }
+      - { api: "v1", kind: "ConfigMap", name: "postgres-dedup-seed" }
       - { api: "v1", kind: "ConfigMap", name: "postgres-init-scripts" }
       - { api: "v1", kind: "Secret", name: "postgres-auth" }
     default_pvc_pattern: "(data-postgres|mancenter-storage-hazelcast-mc|hz-primary|hazelcast-mc)"

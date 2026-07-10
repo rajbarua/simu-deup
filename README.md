@@ -11,6 +11,12 @@ This repo is bootstrapped for GKE-based Hazelcast Simulator experiments. The cur
 - Postgres `18.4`
 - Chaos Mesh `2.8.3`
 
+The deduplication model is intentionally scoped to one payment-id domain per
+deployment. A bank would create a separate IMap/table, and often a separate
+database or Hazelcast cluster, for each payment rail or deduplication domain.
+The `deduplicate` IMap therefore stores plain payment IDs only; there is no
+domain discriminator in the key or table schema.
+
 ## Prerequisites
 
 - Ansible with `google.cloud`, `kubernetes.core`, `community.crypto`, and `community.general` collections.
@@ -36,6 +42,21 @@ cd ~/src/simu-dedup
 ansible-playbook k8s/deploy.yaml --tags="gke,client,hz,postgres,chaos"
 ```
 
+After Postgres becomes Ready, a one-shot Kubernetes Job bulk-generates
+1,000,000 fixed-width, 24-digit baseline IDs
+(`100000000000000000000000` through `100000000000000000999999`)
+directly inside Postgres. Their first-seen values are distributed over the
+previous 365 days and expire 366 days after first-seen. The playbook waits for
+the Job to verify every seed ID before creating Hazelcast, so its EAGER
+MapStore cannot start against a partial baseline. No GCS dataset is used for
+this deterministic 1M-row seed.
+
+To change the baseline, override `dedup_seed_record_count`,
+`dedup_seed_start_id`, or `dedup_seed_id_prefix` as Ansible extra variables.
+The Simulator test's `existingKeyDomain` and prefix must describe the same
+key range. The Job is safe to rerun against a retained Postgres volume; it
+refreshes the configured seed range without removing other records.
+
 After the playbook creates the client VMs:
 
 1. Get the public IPs for VMs named `raj-dedup-client-*` from GCP.
@@ -58,6 +79,17 @@ For IMap + Postgres deduplication:
 ```bash
 perftest run imap_postgres_tests.yaml
 ```
+
+The scenario uses two clients at 5,000 operations/second each, for 10,000
+operations/second in aggregate. `existingKeyPercentage` controls how many
+operations use an existing key. `existingKeySampleSize` controls the size of
+that duplicate hot set; its keys are evenly sampled from the seeded 1M-key
+domain. The remainder use unique 24-digit IDs beginning with `2`. Increment
+`newKeyRunId` before rerunning against the same cluster so the new-key subset
+does not overlap an earlier run. Each Simulator client builds only the
+configured existing-key sample during setup, and the timed path uses a random
+array lookup. New keys use a private character buffer per test thread and do
+not use shared counters or formatting utilities.
 
 ## Chaos Experiments
 

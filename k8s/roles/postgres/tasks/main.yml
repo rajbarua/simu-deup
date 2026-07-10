@@ -6,6 +6,23 @@
   tags:
     - postgres
 
+- name: Validate dedup seed configuration
+  ansible.builtin.assert:
+    that:
+      - dedup_table_name is match('^[A-Za-z_][A-Za-z0-9_]*$')
+      - dedup_seed_id_prefix is match('^[1-9][0-9]{17}$')
+      - (dedup_seed_record_count | int) > 0
+      - (dedup_seed_start_id | int) >= 0
+      - ((dedup_seed_start_id | int) + (dedup_seed_record_count | int)) <= 1000000
+      - (dedup_seed_first_seen_spread_days | int) >= 0
+      - (dedup_map_ttl_seconds | int) > ((dedup_seed_first_seen_spread_days | int) * 86400)
+    fail_msg: >-
+      Invalid dedup seed settings. The ID prefix must be 18 numeric digits,
+      start ID plus record count must fit the six-digit suffix, and the TTL
+      must be longer than the first-seen spread.
+  tags:
+    - postgres
+
 - name: Deploy Postgres for dedup persistence
   kubernetes.core.k8s:
     state: present
@@ -37,9 +54,84 @@
             payload JSONB NOT NULL,
             expirationTime BIGINT NOT NULL
           );
+      ---
+      apiVersion: v1
+      kind: ConfigMap
+      metadata:
+        name: postgres-dedup-seed
+      data:
+        seed.sql: |
+          -- Generate the baseline in Postgres rather than sending one row at a
+          -- time through Simulator. The payload remains a JSON string so it is
+          -- compatible with TransactionDeduplicationMapStore.
+          WITH seed_parameters AS (
+            SELECT
+              (EXTRACT(epoch FROM statement_timestamp()) * 1000)::bigint AS seed_time_millis,
+              {{ dedup_seed_record_count | int }}::bigint AS record_count,
+              ({{ dedup_seed_first_seen_spread_days | int }}::bigint * 86400000) AS spread_millis,
+              ({{ dedup_map_ttl_seconds | int }}::bigint * 1000) AS ttl_millis
+          ),
+          seed_rows AS (
+            SELECT
+              ({{ dedup_seed_start_id | int }}::bigint + sequence_number) AS numeric_id,
+              seed_time_millis -
+                ((sequence_number::numeric * spread_millis) / record_count)::bigint AS first_seen_millis,
+              ttl_millis
+            FROM seed_parameters
+            CROSS JOIN generate_series(
+              0::bigint,
+              ({{ dedup_seed_record_count | int }}::bigint - 1)
+            ) AS sequence_number
+          )
+          INSERT INTO {{ dedup_table_name }} (id, payload, expirationTime)
+          SELECT
+            '{{ dedup_seed_id_prefix }}' || lpad(numeric_id::text, 6, '0'),
+            to_jsonb(first_seen_millis::text),
+            first_seen_millis + ttl_millis
+          FROM seed_rows
+          ON CONFLICT (id) DO UPDATE SET
+            payload = EXCLUDED.payload,
+            expirationTime = EXCLUDED.expirationTime;
 
           CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_{{ dedup_table_name }}_expirationTime
             ON {{ dedup_table_name }}(expirationTime);
+
+          ANALYZE {{ dedup_table_name }};
+
+          DO $seed_verification$
+          DECLARE
+            missing_count bigint;
+            inactive_count bigint;
+          BEGIN
+            SELECT
+              count(*) FILTER (WHERE stored.id IS NULL),
+              count(*) FILTER (
+                WHERE stored.expirationTime <=
+                  (EXTRACT(epoch FROM current_timestamp) * 1000)::bigint
+              )
+            INTO missing_count, inactive_count
+            FROM generate_series(
+              0::bigint,
+              ({{ dedup_seed_record_count | int }}::bigint - 1)
+            ) AS expected(sequence_number)
+            LEFT JOIN {{ dedup_table_name }} AS stored
+              ON stored.id = '{{ dedup_seed_id_prefix }}' ||
+                lpad(
+                  ({{ dedup_seed_start_id | int }}::bigint + expected.sequence_number)::text,
+                  6,
+                  '0'
+                );
+
+            IF missing_count <> 0 THEN
+              RAISE EXCEPTION 'Expected all {{ dedup_seed_record_count | int }} seed IDs, found % missing', missing_count;
+            END IF;
+            IF inactive_count <> 0 THEN
+              RAISE EXCEPTION 'Expected all seed IDs to be active, found % inactive', inactive_count;
+            END IF;
+
+            RAISE NOTICE 'Verified {{ dedup_seed_record_count | int }} active dedup seed rows';
+          END
+          $seed_verification$;
       ---
       apiVersion: v1
       kind: Service
@@ -161,40 +253,48 @@
 
 - name: Wait for Postgres to be ready
   kubernetes.core.k8s_info:
+    api_version: v1
     kind: Pod
-    wait: yes
+    wait: true
     namespace: default
     name: postgres-0
+    wait_condition:
+      type: Ready
+      status: "True"
     wait_sleep: 10
-    wait_timeout: 360
+    wait_timeout: 900
   tags:
     - postgres
 
-- name: Remove previous dedup schema job
+- name: Remove previous Postgres dedup seed job
   kubernetes.core.k8s:
     state: absent
     api_version: batch/v1
     kind: Job
-    name: postgres-dedup-schema
+    name: postgres-dedup-seed
     namespace: default
+    wait: true
   tags:
     - postgres
-    - postgres-schema
 
-- name: Apply dedup schema to existing Postgres
+- name: Bulk-populate Postgres dedup baseline
   kubernetes.core.k8s:
     state: present
     namespace: default
-    definition: |
+    definition:
       apiVersion: batch/v1
       kind: Job
       metadata:
-        name: postgres-dedup-schema
+        name: postgres-dedup-seed
         namespace: default
       spec:
-        ttlSecondsAfterFinished: 300
+        ttlSecondsAfterFinished: 3600
+        activeDeadlineSeconds: 900
         backoffLimit: 2
         template:
+          metadata:
+            labels:
+              app.kubernetes.io/name: postgres-dedup-seed
           spec:
             restartPolicy: Never
             containers:
@@ -211,42 +311,34 @@
                   - |
                     set -eu
                     export PGPASSWORD="$POSTGRES_PASSWORD"
-                    psql -h postgres.default.svc.cluster.local -U "$POSTGRES_USER" -d "$POSTGRES_DB" -v ON_ERROR_STOP=1 <<'SQL'
-                    DROP TABLE IF EXISTS deduplicate_kv;
-                    DROP TABLE IF EXISTS payment_dedup;
-                    DROP TABLE IF EXISTS dedup_attempts;
-
-                    CREATE TABLE IF NOT EXISTS {{ dedup_table_name }} (
-                      id VARCHAR(200) PRIMARY KEY
-                    );
-                    ALTER TABLE {{ dedup_table_name }}
-                      ADD COLUMN IF NOT EXISTS payload JSONB,
-                      ADD COLUMN IF NOT EXISTS expirationTime BIGINT;
-                    UPDATE {{ dedup_table_name }}
-                      SET payload = to_jsonb(id)
-                      WHERE payload IS NULL;
-                    UPDATE {{ dedup_table_name }}
-                      SET expirationTime = ((EXTRACT(epoch FROM current_timestamp) * 1000)::bigint + ({{ dedup_map_ttl_seconds | int }} * 1000))
-                      WHERE expirationTime IS NULL;
-                    ALTER TABLE {{ dedup_table_name }}
-                      ALTER COLUMN id TYPE VARCHAR(200),
-                      ALTER COLUMN payload SET NOT NULL,
-                      ALTER COLUMN expirationTime SET NOT NULL,
-                      DROP COLUMN IF EXISTS service_name,
-                      DROP COLUMN IF EXISTS payment_id,
-                      DROP COLUMN IF EXISTS first_seen_at,
-                      DROP COLUMN IF EXISTS last_seen_at,
-                      DROP COLUMN IF EXISTS seen_count,
-                      DROP COLUMN IF EXISTS expires_at;
-                    CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_{{ dedup_table_name }}_expirationTime
-                      ON {{ dedup_table_name }}(expirationTime);
-                    SQL
+                    psql \
+                      -h postgres.default.svc.cluster.local \
+                      -U "$POSTGRES_USER" \
+                      -d "$POSTGRES_DB" \
+                      -v ON_ERROR_STOP=1 \
+                      -f /seed/seed.sql
+                volumeMounts:
+                  - name: seed-sql
+                    mountPath: /seed
+                    readOnly: true
+            volumes:
+              - name: seed-sql
+                configMap:
+                  name: postgres-dedup-seed
   tags:
     - postgres
-    - postgres-schema
 
-- name: Wait for dedup schema job to complete
-  ansible.builtin.shell: "kubectl wait --for=condition=complete job/postgres-dedup-schema -n default --timeout=300s"
+- name: Wait for Postgres dedup baseline
+  kubernetes.core.k8s_info:
+    api_version: batch/v1
+    kind: Job
+    namespace: default
+    name: postgres-dedup-seed
+    wait: true
+    wait_condition:
+      type: Complete
+      status: "True"
+    wait_sleep: 5
+    wait_timeout: 900
   tags:
     - postgres
-    - postgres-schema

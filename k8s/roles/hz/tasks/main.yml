@@ -245,6 +245,10 @@
         clusterName: hz-primary
         jet:
           resourceUploadEnabled: true
+        exposeExternally:
+          type: Smart
+          discoveryServiceType: LoadBalancer
+          memberAccess: LoadBalancer
         userCodeDeployment:
           clientEnabled: true
           configMaps:

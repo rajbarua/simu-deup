@@ -1,36 +1,3 @@
-- name: imap-postgres-load
-  repetitions: 1
-  duration: 1s
-  driver: hazelcast-enterprise5
-  version: maven=5.7.0
-  clients: 2
-  members: 0
-  loadgenerator_hosts: loadgenerators
-  node_hosts: nodes
-  client_args: >
-    -Xms6g
-    -Xmx6g
-    --add-modules java.se
-    --add-exports java.base/jdk.internal.ref=ALL-UNNAMED
-    --add-opens java.base/java.lang=ALL-UNNAMED
-    --add-opens java.base/sun.nio.ch=ALL-UNNAMED
-    --add-opens java.management/sun.management=ALL-UNNAMED
-    --add-opens jdk.management/com.sun.management.internal=ALL-UNNAMED
-  performance_monitor_interval_seconds: 10
-  verify_enabled: true
-  warmup_seconds: 0
-  cooldown_seconds: 0
-  test:
-    - class: com.hazelcast.simudedupe.tests.DedupLoadTest
-      name: deduplicate
-      threadCount: 1
-      entryCount: 1_000_000_000
-      claimSize: 100_000
-      progressLogInterval: 5_000_000
-      firstSeenSpreadDays: 365
-      idPrefix: "PAY"
-      ratePerSecond: 1
-
 - name: imap-postgres-10k-no-chaos
   repetitions: 1
   duration: 300s
@@ -57,8 +24,11 @@
     - class: com.hazelcast.simudedupe.tests.DedupPutIfAbsentTest
       name: deduplicate
       threadCount: 40
-      existingKeyDomain: 1_000_000_000
-      duplicatePercentage: 50
-      existingIdPrefix: "PAY"
-      newIdPrefix: "NEWPAY"
-      ratePerSecond: 10_000
+      existingKeyDomain: 1_000_000
+      existingKeySampleSize: 10_000
+      existingKeyPercentage: 50
+      existingIdPrefix: "100000000000000000"
+      newIdPrefix: "2"
+      newKeyRunId: 1
+      # Simulator applies the rate per client: 2 x 5K = 10K aggregate TPS.
+      ratePerSecond: 5_000

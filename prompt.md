@@ -22,17 +22,19 @@ The Simulator project is at /Users/raj/src/hazelcast-simulator for reference.
 
 ### Number of payments
 
-As per google search, AXIS bank does 40 million payments per day across all services. UPI itself account for 30 million payments per day. CC maybe 3 million, high value about 1 million and others maybe 0.5 million. We can assume 40m in total per day. UPI does about 2k payments per second.
+As per google search, AXIS bank does about 40 million payments per day across all payment rails. UPI itself accounts for about 30 million payments per day. Credit cards may be around 3 million, high-value payments about 1 million, and others about 0.5 million. We can assume 40m in total per day. UPI does about 2k payments per second.
 
-Deduplication does not happen across all services in the same platform as deduplication is within a service. Therefore we will simulate peak TPS by looking at the busiest service which happens to be UPI. Actual TPS maybe lesser but we will go with 10K TPS for our three dedupe services.
+Deduplication is scoped to a single payment-id domain. The same DB table and IMap should not store payment IDs from more than one payment rail or deduplication domain. In practice, each domain would have its own table and IMap, and likely its own database and Hazelcast deployment. Therefore this project models one deduplication domain at a time and uses plain payment IDs as keys, with no domain discriminator.
+
+For sizing we will simulate peak TPS by looking at a busy domain such as UPI. Actual TPS may be lower, but we will use 10K TPS for the dedupe test.
 
 ### Deduplication via IMap + Postgres
 
 Create an IMap called `deduplicate` and have it backed by a MapStore. Ensure that we are loading only one year of data. In streaming-payments repo there is an IMap called `cdttrftx-txdedup` which loads only last 1 year (or so of ids). We can follow the same pattern. `cdttrftx-txdedup` is used by Jet for the purpose but we will have similar IMap for non Jet and Jet based dedup.
 
-#### Data Load
+#### Data Load (Done for the 1M baseline)
 
-We should test against 100_000_000_0 rows. We can create a new simulator test class based on `LongByteArrayMapTest` probably and have it generate the 1B rows. `TenTxLoad` has some parallel data loads. Basically it will be a challenge to load so much data so find parallel ways. Maybe there are other examples in the simulator project.
+For the current experiment, test against 1,000,000 existing 24-digit payment IDs. A one-shot Kubernetes Job bulk-generates this deterministic baseline inside PostgreSQL and verifies it before Hazelcast starts its EAGER MapStore load. The benchmark can choose a configured percentage from this existing range and generates the remainder as unique 24-digit IDs from a separate range. This avoids sending the seed data through Simulator and does not require a GCS artifact for a small synthetic dataset. Revisit a versioned object or database snapshot when the experiment moves to a much larger or non-synthetic corpus.
 
 #### 10K TPS no Chaos tests
 

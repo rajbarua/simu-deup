@@ -210,9 +210,14 @@ public abstract class MetadataAwareMapStore<V>
         private AllKeysIterator() {
             try {
                 connection = jdbcDataConnection.getConnection();
+                // PostgreSQL JDBC only uses a cursor when auto-commit is off.
+                // Without this, an EAGER load buffers the complete keyset in
+                // the driver before Hazelcast can start consuming it.
+                connection.setAutoCommit(false);
                 statement = connection.prepareStatement("SELECT id FROM " + tableName
                         + " WHERE expirationTime > " + NOW_MILLIS
                         + " ORDER BY id");
+                statement.setFetchSize(batchSize);
                 resultSet = statement.executeQuery();
             } catch (SQLException e) {
                 close();
