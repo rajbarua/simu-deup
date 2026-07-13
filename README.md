@@ -53,6 +53,11 @@ ansible-playbook k8s/deploy.yaml \
 ansible-playbook k8s/deploy.yaml \
   -e dedup_test_mode=cp \
   --tags="gke,client,hz,chaos"
+
+# IMap + PostgreSQL + Jet
+ansible-playbook k8s/deploy.yaml \
+  -e dedup_test_mode=jet \
+  --tags="gke,client,hz,postgres,chaos"
 ```
 
 The three Hazelcast members each request 16 GiB, with an 8 GiB heap and a
@@ -128,6 +133,46 @@ hot set. Each new key is generated from a thread-local 24-character buffer and
 only its hash is calculated on the timed path. Increase `newKeyRunId` for every
 retained-state run, especially after an interrupted population.
 
+For IMap + PostgreSQL + Jet deduplication:
+
+```bash
+perftest run jet_postgres_tests.yaml
+```
+
+The deployment starts the long-running `simu-dedup-jet` job before Simulator.
+Simulator writes uniquely keyed requests to `deduplicate-jet-input`; its event
+journal feeds Jet, which runs asynchronous `putIfAbsent` operations against the
+same MapStore-backed `deduplicate` IMap used by the AP benchmark. Jet writes one
+decision per operation ID to `deduplicate-jet-results`.
+
+Payment IDs and operation IDs are separate 24-digit values. The payment ID is
+the business deduplication key. The operation ID correlates a submission with
+its result and lets AT_LEAST_ONCE replay be distinguished from a true duplicate:
+
+- no previous value: `ACCEPTED`;
+- previous value equals this operation ID: `RETRY`;
+- previous value belongs to another operation: `DUPLICATE`.
+
+Requests, decisions, and the distributed verification helpers use explicit
+Compact serializers registered in both the member and Simulator client
+configuration. Keep those registrations symmetric when adding or evolving
+fields.
+
+The normal `submit` timestep measures input-map acknowledgement latency and TPS.
+A filtered result-map listener completes the `jetEndToEnd` probe when the
+decision becomes visible. Listener delivery is used only for latency: local
+verification falls back to batched result reads for lost listener events, and
+the final global `@Verify` compares this run's distributed input and result
+IMap counts and checks all result classifications. Fallback results are not
+added to the latency histogram.
+
+The job uses `AT_LEAST_ONCE`, a 10-second snapshot interval,
+`requireSnapshotBeforeProcessing`, and the Enterprise map-flush sink. The
+result-map decision is the end-to-end latency boundary; PostgreSQL durability
+is completed independently by the snapshot-driven flush. The default 1M-entry
+event journal provides about 100 seconds of history at 10K TPS; increase
+`jet_event_journal_capacity` before testing a longer recovery interval.
+
 ## Data Sizing
 
 Hazelcast 5.7 serialization produced a 36-byte serialized 24-digit String key
@@ -139,6 +184,7 @@ conservative headroom:
 | --- | ---: |
 | AP, 1M baseline, one backup | less than about 100 MiB per member |
 | AP after 5 minutes at 10K TPS and 50% new keys | less than about 300 MiB per member |
+| Jet input + result + dedup data after the default run | about 0.8 GiB/member serialized, before allocator/metadata overhead |
 | CP, 1M baseline over three groups | about 19.4 MiB per CPMap |
 | CP after the default workload, about 2.5M total keys | about 48.5 MiB per CPMap |
 
@@ -158,6 +204,9 @@ Relevant Hazelcast guidance:
 - [CPMap configuration and size limits](https://docs.hazelcast.com/hazelcast/5.7/data-structures/cpmap)
 - [Native in-memory format](https://docs.hazelcast.com/hazelcast/5.7/data-structures/setting-data-format)
 - [High-density memory configuration](https://docs.hazelcast.com/hazelcast/5.7/storage/high-density-memory)
+- [Compact serialization](https://docs.hazelcast.com/hazelcast/5.7/serialization/compact-serialization)
+- [Map journal source and snapshot-driven map flush](https://docs.hazelcast.com/hazelcast/5.7/integrate/map-connector)
+- [Jet job processing guarantees](https://docs.hazelcast.com/hazelcast/5.7/pipelines/configuring-jobs)
 
 ## Chaos Experiments
 

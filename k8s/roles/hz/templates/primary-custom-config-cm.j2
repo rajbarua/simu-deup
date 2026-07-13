@@ -8,6 +8,13 @@ stringData:
   hazelcast: |-
     management-center:
       scripting-enabled: true
+    serialization:
+      compact-serialization:
+        serializers:
+          - serializer: com.hazelcast.simudedupe.jet.DedupRequestCompactSerializer
+          - serializer: com.hazelcast.simudedupe.jet.DedupResultCompactSerializer
+          - serializer: com.hazelcast.simudedupe.jet.OperationIdPrefixPredicateCompactSerializer
+          - serializer: com.hazelcast.simudedupe.jet.DedupResultStatsAggregatorCompactSerializer
     data-connection:
       {{ dedup_postgres_data_connection }}:
         type: JDBC

@@ -62,6 +62,29 @@ data comfortably below the default 100 MB CPMap limit per shard. Existing hot
 keys and group indexes are precomputed; new 24-digit keys use thread-local
 buffers so key generation is not a material part of timed execution.
 
+### Deduplication via IMap + PostgreSQL + Jet (implemented; cluster run pending)
+
+The same `deduplicate` IMap, PostgreSQL table, 1M baseline, MapStore, and native
+memory configuration are reused. Simulator writes uniquely keyed request
+envelopes to a transient IMap whose event journal is the Jet source. The Jet job
+performs asynchronous `putIfAbsent`, flushes the deduplicate IMap on snapshots,
+and writes an `ACCEPTED`, `DUPLICATE`, or `RETRY` decision to a result IMap.
+
+The job is configured for AT_LEAST_ONCE processing, a 10-second snapshot
+interval, and an initial snapshot before processing. Each operation has a
+separate 24-digit correlation ID so a replay of the same operation is a retry,
+while a different operation with an already-seen 24-digit payment ID is a true
+duplicate.
+
+The request, result, predicate, and verification aggregator types use explicit
+Compact serializers registered on both members and Simulator clients.
+
+Simulator measures input-map acknowledgement in the normal timestep and records
+end-to-end latency when the corresponding decision first appears in the result
+IMap. The result listener is only the latency signal. Final local verification
+drains outstanding results, and global `@Verify` compares the input and result
+IMap counts for the run and fails on any incorrect classification.
+
 ## Execution
 
 I may list many things below. You can create agents and ensure that goal is met. You should execute in stages and use agents if parallel work can be done. Do not add unnecessary abstractions. Keep it simple and straight forward. I will be available to answer questions and provide guidance. You can also use the original projects for reference.

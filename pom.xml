@@ -15,7 +15,22 @@
         <hazelcast.version>5.7.0</hazelcast.version>
         <hazelcast.simulator.version>2.0-SNAPSHOT</hazelcast.simulator.version>
         <log4j.version>2.25.3</log4j.version>
+        <junit.version>5.11.4</junit.version>
     </properties>
+
+    <repositories>
+        <repository>
+            <id>hazelcast-enterprise-release</id>
+            <name>Hazelcast Enterprise Release Repository</name>
+            <url>https://repository.hazelcast.com/release</url>
+            <releases>
+                <enabled>true</enabled>
+            </releases>
+            <snapshots>
+                <enabled>false</enabled>
+            </snapshots>
+        </repository>
+    </repositories>
 
     <dependencies>
         <dependency>
@@ -37,10 +52,22 @@
             <scope>provided</scope>
         </dependency>
         <dependency>
+            <groupId>com.hazelcast</groupId>
+            <artifactId>hazelcast-enterprise</artifactId>
+            <version>${hazelcast.version}</version>
+            <scope>provided</scope>
+        </dependency>
+        <dependency>
             <groupId>org.apache.logging.log4j</groupId>
             <artifactId>log4j-api</artifactId>
             <version>${log4j.version}</version>
             <scope>provided</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter</artifactId>
+            <version>${junit.version}</version>
+            <scope>test</scope>
         </dependency>
     </dependencies>
 

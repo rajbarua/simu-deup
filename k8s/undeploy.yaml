@@ -118,6 +118,25 @@
         - chaos
         - k8s
 
+    - name: Delete Hazelcast JetJob custom resources
+      ansible.builtin.shell: |
+        set -o pipefail
+        kubectl delete jetjob.hazelcast.com --all \
+          -n {{ hazelcast_namespace }} \
+          --ignore-not-found=true \
+          --wait=true \
+          --timeout=300s 2>/dev/null || true
+      args:
+        executable: /bin/bash
+      register: hz_jet_jobs_delete
+      changed_when: "'deleted' in (hz_jet_jobs_delete.stdout | default(''))"
+      when: gke_cluster_exists
+      tags:
+        - undeploy
+        - hz
+        - jet
+        - k8s
+
     - name: Delete Hazelcast map custom resources
       ansible.builtin.shell: |
         set -o pipefail

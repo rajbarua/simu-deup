@@ -26,6 +26,17 @@
         <property name="hazelcast.client.operation.backup.timeout.millis">100</property>
     </properties>
 
+    <serialization>
+        <compact-serialization>
+            <serializers>
+                <serializer>com.hazelcast.simudedupe.jet.DedupRequestCompactSerializer</serializer>
+                <serializer>com.hazelcast.simudedupe.jet.DedupResultCompactSerializer</serializer>
+                <serializer>com.hazelcast.simudedupe.jet.OperationIdPrefixPredicateCompactSerializer</serializer>
+                <serializer>com.hazelcast.simudedupe.jet.DedupResultStatsAggregatorCompactSerializer</serializer>
+            </serializers>
+        </compact-serialization>
+    </serialization>
+
     <!-- client reconnect keeps node failure tests from aborting on a transient connection error -->
     <connection-strategy async-start="false" reconnect-mode="ON">
         <connection-retry>

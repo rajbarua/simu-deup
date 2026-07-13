@@ -126,7 +126,7 @@
         name: "{{ simu_dedup_user_code_config_map }}"
         namespace: default
       binaryData:
-        simu-dedup-tests.jar: "{{ simu_dedup_user_code.content }}"
+        "{{ simu_dedup_user_code_jar_name }}": "{{ simu_dedup_user_code.content }}"
   tags:
     - hz
     - hz-init
@@ -251,6 +251,8 @@
             storageClassName: "{{ cp_persistence_storage_class }}"
         jet:
           resourceUploadEnabled: true
+          configMaps:
+            - "{{ simu_dedup_user_code_config_map }}"
         exposeExternally:
           type: Smart
           discoveryServiceType: LoadBalancer
@@ -305,6 +307,22 @@
     - hz-primary
     - hz
     - hz-platform
+
+- name: Remove previous Jet deduplication job before code redeployment
+  kubernetes.core.k8s:
+    state: absent
+    api_version: hazelcast.com/v1alpha1
+    kind: JetJob
+    namespace: default
+    name: "{{ jet_job_resource_name }}"
+    wait: true
+    wait_timeout: 600
+  when:
+    - dedup_test_mode == 'jet'
+    - jet_job_redeploy | bool
+  tags:
+    - hz
+    - jet
 ######################
 ## Maps
 ######################
@@ -364,6 +382,105 @@
     - hz
     - maps
   when: dedup_test_mode != 'cp'
+
+- name: Create Jet input map with event journal
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: hazelcast.com/v1alpha1
+      kind: Map
+      metadata:
+        name: "{{ jet_input_map_name }}"
+        namespace: default
+      spec:
+        hazelcastResourceName: hz-primary
+        backupCount: 1
+        inMemoryFormat: NATIVE
+        timeToLiveSeconds: "{{ jet_transient_map_ttl_seconds | int }}"
+        eventJournal:
+          capacity: "{{ jet_event_journal_capacity | int }}"
+          timeToLiveSeconds: "{{ jet_event_journal_ttl_seconds | int }}"
+  when: dedup_test_mode == 'jet'
+  tags:
+    - hz
+    - maps
+    - jet
+
+- name: Create Jet result map
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: hazelcast.com/v1alpha1
+      kind: Map
+      metadata:
+        name: "{{ jet_result_map_name }}"
+        namespace: default
+      spec:
+        hazelcastResourceName: hz-primary
+        backupCount: 1
+        inMemoryFormat: NATIVE
+        timeToLiveSeconds: "{{ jet_transient_map_ttl_seconds | int }}"
+  when: dedup_test_mode == 'jet'
+  tags:
+    - hz
+    - maps
+    - jet
+
+- name: Wait for Jet maps to be configured
+  ansible.builtin.shell: |
+    set -euo pipefail
+    for map_name in {{ dedup_map_name }} {{ jet_input_map_name }} {{ jet_result_map_name }}; do
+      kubectl wait \
+        --for=jsonpath='{.status.state}'=Success \
+        "map.hazelcast.com/${map_name}" \
+        -n default \
+        --timeout=600s
+    done
+  args:
+    executable: /bin/bash
+  when: dedup_test_mode == 'jet'
+  tags:
+    - hz
+    - maps
+    - jet
+
+- name: Start Jet deduplication job
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: hazelcast.com/v1alpha1
+      kind: JetJob
+      metadata:
+        name: "{{ jet_job_resource_name }}"
+        namespace: default
+      spec:
+        name: "{{ jet_job_name }}"
+        hazelcastResourceName: hz-primary
+        state: Running
+        jarName: "{{ simu_dedup_user_code_jar_name }}"
+        mainClass: "{{ jet_job_main_class }}"
+        parameters:
+          - "{{ jet_input_map_name }}"
+          - "{{ jet_result_map_name }}"
+          - "{{ dedup_map_name }}"
+          - "{{ jet_max_concurrent_ops }}"
+          - "{{ jet_snapshot_interval_millis }}"
+  when: dedup_test_mode == 'jet'
+  tags:
+    - hz
+    - jet
+
+- name: Wait for Jet deduplication job to be running
+  ansible.builtin.shell: >-
+    kubectl wait
+    --for=jsonpath='{.status.phase}'=Running
+    jetjob.hazelcast.com/{{ jet_job_resource_name }}
+    -n default
+    --timeout=900s
+  when: dedup_test_mode == 'jet'
+  tags:
+    - hz
+    - jet
 ######################
 ## MC
 ######################
