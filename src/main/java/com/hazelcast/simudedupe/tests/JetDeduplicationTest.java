@@ -14,6 +14,7 @@ import com.hazelcast.simudedupe.jet.DedupResult;
 import com.hazelcast.simudedupe.jet.DedupResultStatsAggregator;
 import com.hazelcast.simudedupe.jet.JetDeduplicationJob;
 import com.hazelcast.simudedupe.jet.OperationIdPrefixPredicate;
+import com.hazelcast.simudedupe.jet.PostgresPrefixCountTask;
 import com.hazelcast.simulator.hz.HazelcastTest;
 import com.hazelcast.simulator.probes.LatencyProbe;
 import com.hazelcast.simulator.test.BaseThreadState;
@@ -30,7 +31,10 @@ import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.LongAdder;
 import java.util.regex.Matcher;
@@ -61,8 +65,20 @@ public class JetDeduplicationTest extends HazelcastTest {
     /** Name of the map into which Jet writes one decision per operation ID. */
     public String resultMapName = JetDeduplicationJob.DEFAULT_RESULT_MAP_NAME;
 
-    /** Name assigned to the long-running Jet job by its JobConfig. */
+    /** Prefix of the content-versioned name assigned to the long-running Jet job by its JobConfig. */
     public String jetJobName = JetDeduplicationJob.DEFAULT_JOB_NAME;
+
+    /** Name of the MapStore-backed IMap whose dirty entries are flushed before database verification. */
+    public String dedupMapName = JetDeduplicationJob.DEFAULT_DEDUP_MAP_NAME;
+
+    /** Name of the member-side JDBC data connection used by the deduplication MapStore. */
+    public String databaseConnectionName = "dedup-postgres";
+
+    /** PostgreSQL table backing {@link #dedupMapName}. */
+    public String databaseTableName = "deduplicate";
+
+    /** Maximum time to wait for the member-side PostgreSQL count query. */
+    public int databaseVerificationTimeoutSeconds = 120;
 
     /** Size of the preloaded payment-ID range in the deduplicate MapStore. */
     public long existingKeyDomain = 1_000_000L;
@@ -112,11 +128,13 @@ public class JetDeduplicationTest extends HazelcastTest {
 
     private IMap<String, DedupRequest> inputMap;
     private IMap<String, DedupResult> resultMap;
+    private IMap<String, String> dedupMap;
     private Job jetJob;
     private UUID listenerRegistrationId;
     private LatencyProbe endToEndProbe;
     private String[] existingKeys;
     private String runOperationPrefix;
+    private String newPaymentRunPrefix;
     private String producerOperationPrefix;
     private String newPaymentScopePrefix;
     private final AtomicInteger nextThreadIndex = new AtomicInteger();
@@ -138,11 +156,13 @@ public class JetDeduplicationTest extends HazelcastTest {
         String run = zeroPadded(newKeyRunId, 6);
         String worker = zeroPadded(workerIdentity[0], 3) + zeroPadded(workerIdentity[1], 3);
         runOperationPrefix = operationIdPrefix + run;
+        newPaymentRunPrefix = newIdPrefix + run;
         producerOperationPrefix = runOperationPrefix + worker;
         newPaymentScopePrefix = newIdPrefix + run + worker;
 
         inputMap = targetInstance.getMap(inputMapName);
         resultMap = targetInstance.getMap(resultMapName);
+        dedupMap = targetInstance.getMap(dedupMapName);
         existingKeys = generateExistingKeys();
         endToEndProbe = testContext.getLatencyProbe("jetEndToEnd", false);
 
@@ -236,11 +256,11 @@ public class JetDeduplicationTest extends HazelcastTest {
     }
 
     /**
-     * Final distributed verification. It scans each transient IMap once and
-     * compares counts for this run, then verifies every stored classification.
+     * Final distributed verification. It scans each transient IMap once, verifies every stored classification,
+     * flushes the deduplication MapStore, and compares this run's newly accepted payment count with PostgreSQL.
      */
     @Verify(global = true)
-    public void verifyInputAndResultMaps() {
+    public void verifyInputResultAndDatabaseCounts() {
         if (jetJob.getStatus() != JobStatus.RUNNING) {
             throw new IllegalStateException("Jet job is not RUNNING at verification: " + jetJob.getStatus());
         }
@@ -265,9 +285,18 @@ public class JetDeduplicationTest extends HazelcastTest {
             throw new IllegalStateException("Jet result outcome counts do not add up for run " + newKeyRunId);
         }
 
-        logger.info("Verified Jet IMap counts for run {}: input={}, result={}, accepted={}, duplicates={}, retries={}",
+        dedupMap.flush();
+        long expectedDatabaseCount = resultStats[ACCEPTED] + resultStats[RETRY];
+        long databaseCount = queryDatabaseCount();
+        if (databaseCount != expectedDatabaseCount) {
+            throw new IllegalStateException("Jet/PostgreSQL count mismatch for new payment prefix "
+                    + newPaymentRunPrefix + ": expected=" + expectedDatabaseCount + ", database=" + databaseCount);
+        }
+
+        logger.info("Verified Jet IMap/PostgreSQL counts for run {}: input={}, result={}, accepted={}, "
+                        + "duplicates={}, retries={}, databaseNewPayments={}",
                 newKeyRunId, inputCount, resultStats[TOTAL], resultStats[ACCEPTED],
-                resultStats[DUPLICATE], resultStats[RETRY]);
+                resultStats[DUPLICATE], resultStats[RETRY], databaseCount);
     }
 
     @Teardown(global = false)
@@ -281,8 +310,12 @@ public class JetDeduplicationTest extends HazelcastTest {
         long deadlineNanos = System.nanoTime() + TimeUnit.SECONDS.toNanos(jobStartTimeoutSeconds);
         Job found;
         do {
-            found = targetInstance.getJet().getJob(jetJobName);
-            if (found != null && found.getStatus() == JobStatus.RUNNING) {
+            found = targetInstance.getJet().getJobs().stream()
+                    .filter(job -> job.getName() != null && job.getName().startsWith(jetJobName))
+                    .filter(job -> job.getStatus() == JobStatus.RUNNING)
+                    .findFirst()
+                    .orElse(null);
+            if (found != null) {
                 return found;
             }
             sleepMillis(500L);
@@ -300,6 +333,24 @@ public class JetDeduplicationTest extends HazelcastTest {
             Set<String> batch = new HashSet<>(operationIds.subList(offset, end));
             Map<String, DedupResult> found = resultMap.getAll(batch);
             found.forEach((operationId, result) -> complete(operationId, result, false));
+        }
+    }
+
+    private long queryDatabaseCount() {
+        Future<Long> count = targetInstance.getExecutorService("jet-database-verification")
+                .submit(new PostgresPrefixCountTask(
+                        databaseConnectionName, databaseTableName, newPaymentRunPrefix));
+        try {
+            return count.get(databaseVerificationTimeoutSeconds, TimeUnit.SECONDS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException("Interrupted while verifying PostgreSQL count", e);
+        } catch (ExecutionException e) {
+            throw new IllegalStateException("PostgreSQL count verification failed", e.getCause());
+        } catch (TimeoutException e) {
+            count.cancel(true);
+            throw new IllegalStateException("PostgreSQL count verification exceeded "
+                    + databaseVerificationTimeoutSeconds + " seconds", e);
         }
     }
 
@@ -386,8 +437,14 @@ public class JetDeduplicationTest extends HazelcastTest {
         if (newKeyRunId < 0 || newKeyRunId > 999_999) {
             throw new IllegalArgumentException("newKeyRunId must fit six digits");
         }
-        if (jobStartTimeoutSeconds <= 0 || resultDrainTimeoutSeconds <= 0 || resultRecoveryBatchSize <= 0) {
+        if (jobStartTimeoutSeconds <= 0 || resultDrainTimeoutSeconds <= 0
+                || databaseVerificationTimeoutSeconds <= 0 || resultRecoveryBatchSize <= 0) {
             throw new IllegalArgumentException("Jet timeouts and result recovery batch size must be positive");
+        }
+        if (dedupMapName == null || dedupMapName.isBlank()
+                || databaseConnectionName == null || databaseConnectionName.isBlank()
+                || databaseTableName == null || databaseTableName.isBlank()) {
+            throw new IllegalArgumentException("Dedup map and PostgreSQL verification names must not be blank");
         }
     }
 

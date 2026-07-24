@@ -15,6 +15,7 @@ stringData:
           - serializer: com.hazelcast.simudedupe.jet.DedupResultCompactSerializer
           - serializer: com.hazelcast.simudedupe.jet.OperationIdPrefixPredicateCompactSerializer
           - serializer: com.hazelcast.simudedupe.jet.DedupResultStatsAggregatorCompactSerializer
+          - serializer: com.hazelcast.simudedupe.jet.PostgresPrefixCountTaskCompactSerializer
     data-connection:
       {{ dedup_postgres_data_connection }}:
         type: JDBC

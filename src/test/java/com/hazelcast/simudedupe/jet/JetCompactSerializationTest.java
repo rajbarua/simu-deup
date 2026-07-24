@@ -16,6 +16,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class JetCompactSerializationTest {
@@ -32,6 +33,14 @@ class JetCompactSerializationTest {
                 .build()
                 .getSerializationConfig();
         assertCompactRoundTrips(config);
+    }
+
+    @Test
+    void databaseCountTaskRejectsSqlIdentifiersAndNonNumericPrefixes() {
+        assertThrows(IllegalArgumentException.class,
+                () -> new PostgresPrefixCountTask("dedup-postgres", "deduplicate; DROP TABLE deduplicate", "2000001"));
+        assertThrows(IllegalArgumentException.class,
+                () -> new PostgresPrefixCountTask("dedup-postgres", "deduplicate", "2000001%"));
     }
 
     private static void assertCompactRoundTrips(SerializationConfig config) {
@@ -65,6 +74,12 @@ class JetCompactSerializationTest {
             aggregator.accumulate(Map.entry(result.getOperationId(), result));
             DedupResultStatsAggregator aggregatorCopy = compactRoundTrip(serializationService, aggregator);
             assertArrayEquals(aggregator.aggregate(), aggregatorCopy.aggregate());
+
+            PostgresPrefixCountTask countTask = compactRoundTrip(serializationService,
+                    new PostgresPrefixCountTask("dedup-postgres", "deduplicate", "2000001"));
+            assertEquals("dedup-postgres", countTask.getConnectionName());
+            assertEquals("deduplicate", countTask.getTableName());
+            assertEquals("2000001", countTask.getIdPrefix());
         } finally {
             serializationService.dispose();
         }
@@ -75,7 +90,8 @@ class JetCompactSerializationTest {
                 .addSerializer(new DedupRequestCompactSerializer())
                 .addSerializer(new DedupResultCompactSerializer())
                 .addSerializer(new OperationIdPrefixPredicateCompactSerializer())
-                .addSerializer(new DedupResultStatsAggregatorCompactSerializer());
+                .addSerializer(new DedupResultStatsAggregatorCompactSerializer())
+                .addSerializer(new PostgresPrefixCountTaskCompactSerializer());
     }
 
     private static SchemaService inMemorySchemaService() {

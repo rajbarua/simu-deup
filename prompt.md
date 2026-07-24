@@ -40,50 +40,23 @@ For the current experiment, test against 1,000,000 existing 24-digit payment IDs
 
 Once data load is done, we should have 5 min tests putIfAbsent. As of now no chaos, just simple tests. Throughput should be limited to 10K
 
-The AP map uses Hazelcast native memory. The current three-member sizing is an
-8 GiB JVM heap plus a 4 GiB pooled native-memory region inside a 16 GiB member
-container. For the 1M baseline with one backup, including conservative
-serialized-data, allocator, and record-metadata allowances, this is well within
-the available native-memory capacity.
+The AP map uses Hazelcast native memory. The current three-member sizing is an 8 GiB JVM heap plus a 4 GiB pooled native-memory region inside a 16 GiB member container. For the 1M baseline with one backup, including conservative serialized-data, allocator, and record-metadata allowances, this is well within the available native-memory capacity.
 
 ### Deduplication via CPMap (initial no-chaos test done)
 
-CP is enabled with persistence on the same Hazelcast deployment used by AP and
-Jet; there is no separate CP deployment playbook. Each member has a 50 GiB
-persistent volume. AP and CP deduplication data are not tested concurrently.
+CP is enabled with persistence on the same Hazelcast deployment used by AP and Jet; there is no separate CP deployment playbook. Each member has a 50 GiB persistent volume. AP and CP deduplication data are not tested concurrently.
 
-The custom CPMap Simulator test populates its own 1M existing 24-digit IDs in
-parallel during Prepare, then runs the same 10K TPS, five-minute
-`putIfAbsent` mix. `cpGroupCount` controls the number of CPMap shards. Population
-and test operations both choose the shard with
-`floorMod(key.hashCode(), cpGroupCount)`, so a payment ID always reaches the
-same CP group. Three groups are used by default, keeping the estimated logical
-data comfortably below the default 100 MB CPMap limit per shard. Existing hot
-keys and group indexes are precomputed; new 24-digit keys use thread-local
-buffers so key generation is not a material part of timed execution.
+The custom CPMap Simulator test populates its own 1M existing 24-digit IDs in parallel during Prepare, then runs the same 10K TPS, five-minute `putIfAbsent` mix. `cpGroupCount` controls the number of CPMap shards. Population and test operations both choose the shard with `floorMod(key.hashCode(), cpGroupCount)`, so a payment ID always reaches the same CP group. Three groups are used by default, keeping the estimated logical data comfortably below the default 100 MB CPMap limit per shard. Existing hot keys and group indexes are precomputed; new 24-digit keys use thread-local buffers so key generation is not a material part of timed execution.
 
 ### Deduplication via IMap + PostgreSQL + Jet (implemented; cluster run pending)
 
-The same `deduplicate` IMap, PostgreSQL table, 1M baseline, MapStore, and native
-memory configuration are reused. Simulator writes uniquely keyed request
-envelopes to a transient IMap whose event journal is the Jet source. The Jet job
-performs asynchronous `putIfAbsent`, flushes the deduplicate IMap on snapshots,
-and writes an `ACCEPTED`, `DUPLICATE`, or `RETRY` decision to a result IMap.
+The same `deduplicate` IMap, PostgreSQL table, 1M baseline, MapStore, and native memory configuration are reused. Simulator writes uniquely keyed request envelopes to a transient IMap whose event journal is the Jet source. The Jet job performs asynchronous `putIfAbsent`, flushes the deduplicate IMap on snapshots, and writes an `ACCEPTED`, `DUPLICATE`, or `RETRY` decision to a result IMap.
 
-The job is configured for AT_LEAST_ONCE processing, a 10-second snapshot
-interval, and an initial snapshot before processing. Each operation has a
-separate 24-digit correlation ID so a replay of the same operation is a retry,
-while a different operation with an already-seen 24-digit payment ID is a true
-duplicate.
+The job is configured for AT_LEAST_ONCE processing, a 10-second snapshot interval, and an initial snapshot before processing. Each operation has a separate 24-digit correlation ID so a replay of the same operation is a retry, while a different operation with an already-seen 24-digit payment ID is a true duplicate.
 
-The request, result, predicate, and verification aggregator types use explicit
-Compact serializers registered on both members and Simulator clients.
+The request, result, predicate, verification aggregator, and member-side database verification task use explicit Compact serializers registered on both members and Simulator clients.
 
-Simulator measures input-map acknowledgement in the normal timestep and records
-end-to-end latency when the corresponding decision first appears in the result
-IMap. The result listener is only the latency signal. Final local verification
-drains outstanding results, and global `@Verify` compares the input and result
-IMap counts for the run and fails on any incorrect classification.
+Simulator measures input-map acknowledgement in the normal timestep and records end-to-end latency when the corresponding decision first appears in the result IMap. The result listener is only the latency signal. Final local verification drains outstanding results, and global `@Verify` compares the input and result IMap counts for the run and fails on any incorrect classification. It then flushes the MapStore-backed deduplication IMap and verifies that the active PostgreSQL row count for this run's new-payment prefix equals `ACCEPTED + RETRY`; duplicates must not add rows.
 
 ## Execution
 

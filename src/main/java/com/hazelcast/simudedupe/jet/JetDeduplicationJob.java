@@ -2,7 +2,6 @@ package com.hazelcast.simudedupe.jet;
 
 import com.hazelcast.core.Hazelcast;
 import com.hazelcast.core.HazelcastInstance;
-import com.hazelcast.jet.Job;
 import com.hazelcast.jet.config.JobConfig;
 import com.hazelcast.jet.config.ProcessingGuarantee;
 import com.hazelcast.jet.pipeline.EnterpriseSinks;
@@ -35,6 +34,7 @@ public final class JetDeduplicationJob {
                 Integer.toString(DEFAULT_MAX_CONCURRENT_OPS)));
         long snapshotIntervalMillis = Long.parseLong(argument(args, 4,
                 Long.toString(DEFAULT_SNAPSHOT_INTERVAL_MILLIS)));
+        String jobName = argument(args, 5, DEFAULT_JOB_NAME);
 
         if (maxConcurrentOps <= 0 || snapshotIntervalMillis <= 0L) {
             throw new IllegalArgumentException("Jet concurrency and snapshot interval must be positive");
@@ -42,16 +42,18 @@ public final class JetDeduplicationJob {
 
         HazelcastInstance hazelcast = Hazelcast.bootstrappedInstance();
         JobConfig jobConfig = new JobConfig();
-        jobConfig.setName(DEFAULT_JOB_NAME);
+        jobConfig.setName(jobName);
         jobConfig.setProcessingGuarantee(ProcessingGuarantee.AT_LEAST_ONCE);
         jobConfig.setSnapshotIntervalMillis(snapshotIntervalMillis);
         jobConfig.setRequireSnapshotBeforeProcessing(true);
         jobConfig.setSuspendOnFailure(true);
         jobConfig.setStoreMetricsAfterJobCompletion(true);
 
-        Job job = hazelcast.getJet().newJobIfAbsent(
+        // Operator executes this main class through Hazelcast's member-side
+        // JAR service. Submission must return after creating the long-running
+        // job; join() is explicitly rejected by that service.
+        hazelcast.getJet().newJob(
                 pipeline(inputMapName, resultMapName, dedupMapName, maxConcurrentOps), jobConfig);
-        job.join();
     }
 
     public static Pipeline pipeline(

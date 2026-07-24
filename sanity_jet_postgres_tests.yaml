@@ -1,6 +1,6 @@
-- name: jet-postgres-dedup-10k-no-chaos
+- name: jet-postgres-dedup-sanity
   repetitions: 1
-  duration: 300s
+  duration: 20s
   driver: hazelcast-enterprise5
   version: maven=5.7.0
   clients: 2
@@ -8,22 +8,16 @@
   loadgenerator_hosts: loadgenerators
   node_hosts: nodes
   client_args: >
-    -Xms6g
-    -Xmx6g
-    --add-modules java.se
-    --add-exports java.base/jdk.internal.ref=ALL-UNNAMED
-    --add-opens java.base/java.lang=ALL-UNNAMED
-    --add-opens java.base/sun.nio.ch=ALL-UNNAMED
-    --add-opens java.management/sun.management=ALL-UNNAMED
-    --add-opens jdk.management/com.sun.management.internal=ALL-UNNAMED
+    -Xms2g
+    -Xmx2g
   performance_monitor_interval_seconds: 1
   verify_enabled: true
-  warmup_seconds: 10
-  cooldown_seconds: 10
+  warmup_seconds: 2
+  cooldown_seconds: 2
   test:
     - class: com.hazelcast.simudedupe.tests.JetDeduplicationTest
       name: jetDeduplicate
-      threadCount: 40
+      threadCount: 4
       inputMapName: deduplicate-jet-input
       resultMapName: deduplicate-jet-results
       jetJobName: simu-dedup-jet
@@ -32,15 +26,14 @@
       databaseTableName: deduplicate
       databaseVerificationTimeoutSeconds: 120
       existingKeyDomain: 1_000_000
-      existingKeySampleSize: 10_000
+      existingKeySampleSize: 1_000
       existingKeyPercentage: 50
       existingIdPrefix: "100000000000000000"
       newIdPrefix: "2"
       operationIdPrefix: "9"
-      newKeyRunId: 1
-      jobStartTimeoutSeconds: 600
+      newKeyRunId: 105
+      jobStartTimeoutSeconds: 300
       resultDrainTimeoutSeconds: 120
-      resultRecoveryBatchSize: 1_000
+      resultRecoveryBatchSize: 500
       resetTransientMaps: true
-      # Simulator applies the rate per client: 2 x 5K = 10K aggregate TPS.
-      ratePerSecond: 5_000
+      ratePerSecond: 200

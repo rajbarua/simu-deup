@@ -10,13 +10,17 @@
     - hz-init
 # tasks file for k8s/roles/hz
 - name: Install Hazelcast Operator
-  shell: >
-    helm upgrade --install hzoperator hazelcast/hazelcast-platform-operator
-    --version={{ hazelcast_operator_chart_version }}
-    --set=installCRDs=true
-    --set=nodeSelector."component"="{{ mc_cluster_node_pool }}"
-  register: command_result
-  failed_when: command_result.rc >= 2
+  kubernetes.core.helm:
+    name: hzoperator
+    chart_ref: hazelcast/hazelcast-platform-operator
+    chart_version: "{{ hazelcast_operator_chart_version }}"
+    release_namespace: default
+    values:
+      installCRDs: true
+      nodeSelector:
+        component: "{{ mc_cluster_node_pool }}"
+    wait: true
+    wait_timeout: 5m
   tags:
     - hz
     - operator
@@ -89,12 +93,14 @@
 - name: Check Simulator dedup user-code jar
   ansible.builtin.stat:
     path: "{{ simu_dedup_user_code_jar }}"
+    checksum_algorithm: sha256
   register: simu_dedup_user_code_jar_stat
   tags:
     - hz
     - hz-init
     - hz-primary
     - maps
+    - jet
 
 - name: Validate Simulator dedup user-code jar
   ansible.builtin.fail:
@@ -125,8 +131,8 @@
       metadata:
         name: "{{ simu_dedup_user_code_config_map }}"
         namespace: default
-      binaryData:
-        "{{ simu_dedup_user_code_jar_name }}": "{{ simu_dedup_user_code.content }}"
+      binaryData: "{{ {simu_dedup_user_code_jar_name: simu_dedup_user_code.content} }}"
+  register: simu_dedup_user_code_config_map_result
   tags:
     - hz
     - hz-init
@@ -253,15 +259,10 @@
           resourceUploadEnabled: true
           configMaps:
             - "{{ simu_dedup_user_code_config_map }}"
-        exposeExternally:
-          type: Smart
-          discoveryServiceType: LoadBalancer
-          memberAccess: LoadBalancer
         userCodeDeployment:
           clientEnabled: true
           configMaps:
             - "{{ simu_dedup_user_code_config_map }}"
-          triggerSequence: "{{ simu_dedup_user_code.content | hash('sha256') }}"
         resources:
           requests:
             cpu: "{{ hazelcast_cpu_request }}"
@@ -283,6 +284,7 @@
           #"hazelcast.max.no.heartbeat.seconds": "3"
           #"hazelcast.operation.call.timeout.millis": "3000"
           #"hazelcast.partition.count": "647"
+  register: hazelcast_primary_result
   tags:
     - hz-primary
     - hz
@@ -308,6 +310,81 @@
     - hz
     - hz-platform
 
+- name: Restart existing Hazelcast members after user-code changes
+  ansible.builtin.command: kubectl rollout restart statefulset/hz-primary -n default
+  when:
+    - simu_dedup_user_code_config_map_result is defined
+    - simu_dedup_user_code_config_map_result.changed
+    - hazelcast_primary_result is defined
+    - not hazelcast_primary_result.changed
+  tags:
+    - hz-primary
+    - hz
+    - hz-platform
+
+- name: Wait for restarted Hazelcast members
+  ansible.builtin.command: kubectl rollout status statefulset/hz-primary -n default --timeout=600s
+  when:
+    - simu_dedup_user_code_config_map_result is defined
+    - simu_dedup_user_code_config_map_result.changed
+    - hazelcast_primary_result is defined
+    - not hazelcast_primary_result.changed
+  tags:
+    - hz-primary
+    - hz
+    - hz-platform
+
+- name: Enable Smart external access after Hazelcast bootstrap
+  kubernetes.core.k8s_json_patch:
+    api_version: hazelcast.com/v1alpha1
+    kind: Hazelcast
+    namespace: default
+    name: hz-primary
+    patch:
+      - op: add
+        path: /spec/exposeExternally
+        value:
+          type: Smart
+          discoveryServiceType: LoadBalancer
+          memberAccess: LoadBalancer
+  tags:
+    - hz-primary
+    - hz
+    - hz-platform
+
+- name: Wait for Hazelcast Smart client services and members
+  ansible.builtin.shell: |
+    set -euo pipefail
+    for service_name in hz-primary hz-primary-0 hz-primary-1 hz-primary-2; do
+      kubectl wait \
+        --for=create \
+        "service/${service_name}" \
+        -n default \
+        --timeout=600s
+      kubectl wait \
+        --for=jsonpath='{.status.loadBalancer.ingress[0].ip}' \
+        "service/${service_name}" \
+        -n default \
+        --timeout=600s
+    done
+    kubectl wait \
+      --for=condition=ready \
+      pod \
+      -l app.kubernetes.io/instance=hz-primary,app.kubernetes.io/name=hazelcast \
+      -n default \
+      --timeout=600s
+    kubectl wait \
+      --for=jsonpath='{.status.phase}'=Running \
+      hazelcast/hz-primary \
+      -n default \
+      --timeout=600s
+  args:
+    executable: /bin/bash
+  tags:
+    - hz-primary
+    - hz
+    - hz-platform
+
 - name: Remove previous Jet deduplication job before code redeployment
   kubernetes.core.k8s:
     state: absent
@@ -319,7 +396,10 @@
     wait_timeout: 600
   when:
     - dedup_test_mode == 'jet'
-    - jet_job_redeploy | bool
+    - >-
+      jet_job_redeploy | bool or
+      (simu_dedup_user_code_config_map_result is defined and
+      simu_dedup_user_code_config_map_result.changed)
   tags:
     - hz
     - jet
@@ -457,7 +537,10 @@
         name: "{{ jet_job_name }}"
         hazelcastResourceName: hz-primary
         state: Running
-        jarName: "{{ simu_dedup_user_code_jar_name }}"
+        # Jet ConfigMap resources are mounted below a directory named after
+        # their ConfigMap. The member-side submission API resolves this path
+        # relative to /opt/hazelcast/jetJobJars.
+        jarName: "{{ simu_dedup_jet_jar_name }}"
         mainClass: "{{ jet_job_main_class }}"
         parameters:
           - "{{ jet_input_map_name }}"
@@ -465,6 +548,7 @@
           - "{{ dedup_map_name }}"
           - "{{ jet_max_concurrent_ops }}"
           - "{{ jet_snapshot_interval_millis }}"
+          - "{{ jet_job_name }}"
   when: dedup_test_mode == 'jet'
   tags:
     - hz

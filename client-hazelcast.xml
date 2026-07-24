@@ -9,7 +9,7 @@
 
     <network>
         <cluster-members>
-            <address>127.0.0.1</address>
+            <address>35.200.231.32</address>
         </cluster-members>
         <!-- write operations are idempotent, set redo to true -->
         <redo-operation>true</redo-operation>
@@ -33,6 +33,7 @@
                 <serializer>com.hazelcast.simudedupe.jet.DedupResultCompactSerializer</serializer>
                 <serializer>com.hazelcast.simudedupe.jet.OperationIdPrefixPredicateCompactSerializer</serializer>
                 <serializer>com.hazelcast.simudedupe.jet.DedupResultStatsAggregatorCompactSerializer</serializer>
+                <serializer>com.hazelcast.simudedupe.jet.PostgresPrefixCountTaskCompactSerializer</serializer>
             </serializers>
         </compact-serialization>
     </serialization>

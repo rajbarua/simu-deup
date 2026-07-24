@@ -147,6 +147,7 @@ public class DedupCpMapTest extends HazelcastTest {
     private String[] firstSeenValues;
     private LongAdder[] groupAttempts;
     private String newKeyScopePrefix;
+    private String cpMapRunName;
 
     @Setup
     public void setup() {
@@ -159,6 +160,7 @@ public class DedupCpMapTest extends HazelcastTest {
 
         CPSubsystem cpSubsystem = targetInstance.getCPSubsystem();
         String controlPrefix = name + "-cp-run-" + zeroPadded(newKeyRunId, 6);
+        cpMapRunName = name + "-run-" + zeroPadded(newKeyRunId, 6);
         resetOwner = cpSubsystem.getAtomicLong(controlPrefix + "-reset-owner");
         resetComplete = cpSubsystem.getAtomicLong(controlPrefix + "-reset-complete");
         loadCursor = cpSubsystem.getAtomicLong(controlPrefix + "-load-cursor");
@@ -282,6 +284,9 @@ public class DedupCpMapTest extends HazelcastTest {
 
     @Verify(global = true)
     public void cleanupPopulationControls() {
+        for (CPMap<String, String> map : maps) {
+            map.destroy();
+        }
         resetOwner.destroy();
         resetComplete.destroy();
         loadCursor.destroy();
@@ -297,9 +302,6 @@ public class DedupCpMapTest extends HazelcastTest {
         targetInstance.getDistributedObjects().stream()
                 .filter(object -> object instanceof IMap<?, ?> && object.getName().equals(name))
                 .forEach(object -> object.destroy());
-        for (CPMap<String, String> map : createMaps(cpSubsystem)) {
-            map.destroy();
-        }
         loadCursor.set(0L);
         loadedCount.set(0L);
         populationEpochMillis.set(System.currentTimeMillis());
@@ -326,7 +328,7 @@ public class DedupCpMapTest extends HazelcastTest {
     private CPMap<String, String>[] createMaps(CPSubsystem cpSubsystem) {
         CPMap<String, String>[] result = (CPMap<String, String>[]) new CPMap<?, ?>[cpGroupCount];
         for (int group = 0; group < cpGroupCount; group++) {
-            result[group] = cpSubsystem.getMap(name + "@" + cpGroupName(group));
+            result[group] = cpSubsystem.getMap(cpMapRunName + "@" + cpGroupName(group));
         }
         return result;
     }
