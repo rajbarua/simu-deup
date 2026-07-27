@@ -460,6 +460,43 @@
         - gke
         - network
 
+    - name: Find remaining firewall rules attached to the VPC
+      ansible.builtin.command:
+        argv:
+          - gcloud
+          - compute
+          - firewall-rules
+          - list
+          - --project={{ project_id }}
+          - --filter=network:{{ cluster_name }}-network
+          - --format=value(name)
+      register: remaining_firewall_rules
+      changed_when: false
+      tags:
+        - undeploy
+        - gke
+        - network
+
+    - name: Delete remaining firewall rules attached to the VPC
+      ansible.builtin.command:
+        argv:
+          - gcloud
+          - compute
+          - firewall-rules
+          - delete
+          - "{{ item }}"
+          - --project={{ project_id }}
+          - --quiet
+      loop: "{{ remaining_firewall_rules.stdout_lines | default([]) }}"
+      loop_control:
+        label: "{{ item }}"
+      register: delete_remaining_firewall_rule
+      changed_when: delete_remaining_firewall_rule.rc == 0
+      tags:
+        - undeploy
+        - gke
+        - network
+
     - name: Delete GKE subnet
       ansible.builtin.shell: |
         set -o pipefail
