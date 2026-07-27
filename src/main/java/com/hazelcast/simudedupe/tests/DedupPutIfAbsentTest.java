@@ -1,12 +1,20 @@
 package com.hazelcast.simudedupe.tests;
 
+import com.hazelcast.aggregation.Aggregators;
 import com.hazelcast.map.IMap;
+import com.hazelcast.simudedupe.jet.OperationIdPrefixPredicate;
+import com.hazelcast.simudedupe.jet.PostgresPrefixCountTask;
 import com.hazelcast.simulator.hz.HazelcastTest;
 import com.hazelcast.simulator.test.BaseThreadState;
 import com.hazelcast.simulator.test.annotations.Setup;
 import com.hazelcast.simulator.test.annotations.TimeStep;
 import com.hazelcast.simulator.test.annotations.Verify;
 
+import java.util.Map;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.LongAdder;
 import java.util.regex.Matcher;
@@ -75,6 +83,15 @@ public class DedupPutIfAbsentTest extends HazelcastTest {
      */
     public int newKeyRunId = 1;
 
+    /** Name of the member-side JDBC data connection used by this map's MapStore. */
+    public String databaseConnectionName = "dedup-postgres";
+
+    /** PostgreSQL table backing the IMap named by the test's {@code name} property. */
+    public String databaseTableName = "deduplicate";
+
+    /** Maximum time to wait for the member-side PostgreSQL count query. */
+    public int databaseVerificationTimeoutSeconds = 120;
+
     private IMap<String, String> map;
     private final LongAdder accepted = new LongAdder();
     private final LongAdder duplicates = new LongAdder();
@@ -115,6 +132,42 @@ public class DedupPutIfAbsentTest extends HazelcastTest {
     public void verify() {
         logger.info("putIfAbsent results for {}: existingKeyAttempts={}, newKeyAttempts={}, accepted={}, duplicates={}",
                 name, existingKeyAttempts.sum(), newKeyAttempts.sum(), accepted.sum(), duplicates.sum());
+    }
+
+    /** Flushes MapStore and verifies that this run's new-key count matches active PostgreSQL rows. */
+    @Verify(global = true)
+    public void verifyDatabaseCount() {
+        String runPrefix = newIdPrefix + zeroPadded(newKeyRunId, 6);
+        long mapCount = map.aggregate(
+                Aggregators.<Map.Entry<String, String>>count(),
+                new OperationIdPrefixPredicate<String>(runPrefix));
+
+        map.flush();
+        long databaseCount = queryDatabaseCount(runPrefix);
+        if (databaseCount != mapCount) {
+            throw new IllegalStateException("IMap/PostgreSQL count mismatch for new payment prefix "
+                    + runPrefix + ": map=" + mapCount + ", database=" + databaseCount);
+        }
+
+        logger.info("Verified IMap/PostgreSQL counts for new payment prefix {}: map={}, database={}",
+                runPrefix, mapCount, databaseCount);
+    }
+
+    private long queryDatabaseCount(String runPrefix) {
+        Future<Long> count = targetInstance.getExecutorService("imap-database-verification")
+                .submit(new PostgresPrefixCountTask(databaseConnectionName, databaseTableName, runPrefix));
+        try {
+            return count.get(databaseVerificationTimeoutSeconds, TimeUnit.SECONDS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException("Interrupted while verifying PostgreSQL count", e);
+        } catch (ExecutionException e) {
+            throw new IllegalStateException("PostgreSQL count verification failed", e.getCause());
+        } catch (TimeoutException e) {
+            count.cancel(true);
+            throw new IllegalStateException("PostgreSQL count verification exceeded "
+                    + databaseVerificationTimeoutSeconds + " seconds", e);
+        }
     }
 
     private String existingKey(ThreadState state) {
@@ -174,6 +227,13 @@ public class DedupPutIfAbsentTest extends HazelcastTest {
         }
         if (newKeyRunId < 0 || newKeyRunId > 999_999) {
             throw new IllegalArgumentException("newKeyRunId must fit six digits");
+        }
+        if (databaseConnectionName == null || databaseConnectionName.isBlank()
+                || databaseTableName == null || databaseTableName.isBlank()) {
+            throw new IllegalArgumentException("PostgreSQL verification names must not be blank");
+        }
+        if (databaseVerificationTimeoutSeconds <= 0) {
+            throw new IllegalArgumentException("databaseVerificationTimeoutSeconds must be positive");
         }
     }
 

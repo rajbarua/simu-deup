@@ -83,7 +83,9 @@ For IMap + Postgres deduplication:
 perftest run imap_postgres_tests.yaml
 ```
 
-The scenario uses two clients at 5,000 operations/second each, for 10,000 operations/second in aggregate. `existingKeyPercentage` controls how many operations use an existing key. `existingKeySampleSize` controls the size of that duplicate hot set; its keys are evenly sampled from the seeded 1M-key domain. The remainder use unique 24-digit IDs beginning with `2`. Increment `newKeyRunId` before rerunning against the same cluster so the new-key subset does not overlap an earlier run. Each Simulator client builds only the configured existing-key sample during setup, and the timed path uses a random array lookup. New keys use a private character buffer per test thread and do not use shared counters or formatting utilities.
+The scenario uses 4 clients at 2,500 operations/second each, for 10,000 operations/second in aggregate. `existingKeyPercentage` controls how many operations use an existing key. `existingKeySampleSize` controls the size of that duplicate hot set; its keys are evenly sampled from the seeded 1M-key domain. The remainder use unique 24-digit IDs beginning with `2`. Increment `newKeyRunId` before rerunning against the same cluster so the new-key subset does not overlap an earlier run. Each Simulator client builds only the configured existing-key sample during setup, and the timed path uses a random array lookup. New keys use a private character buffer per test thread and do not use shared counters or formatting utilities.
+
+The final global verification flushes the MapStore-backed IMap and compares its active key count with PostgreSQL for the current run prefix (`newIdPrefix + newKeyRunId`). This excludes the seeded baseline and data from other runs. Tune `databaseConnectionName`, `databaseTableName`, and `databaseVerificationTimeoutSeconds` in `imap_postgres_tests.yaml` if the deployment names or expected flush time change.
 
 For CPMap deduplication:
 

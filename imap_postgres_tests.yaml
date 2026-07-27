@@ -1,9 +1,9 @@
-- name: imap-postgres-10k-no-chaos
+- name: imap-postgres-10k
   repetitions: 1
-  duration: 300s
+  duration: 120s
   driver: hazelcast-enterprise5
   version: maven=5.7.0
-  clients: 2
+  clients: 4
   members: 0
   loadgenerator_hosts: loadgenerators
   node_hosts: nodes
@@ -18,17 +18,20 @@
     --add-opens jdk.management/com.sun.management.internal=ALL-UNNAMED
   performance_monitor_interval_seconds: 1
   verify_enabled: true
-  warmup_seconds: 10
-  cooldown_seconds: 10
+  warmup_seconds: 60
+  cooldown_seconds: 0
   test:
     - class: com.hazelcast.simudedupe.tests.DedupPutIfAbsentTest
       name: deduplicate
       threadCount: 40
       existingKeyDomain: 1_000_000
       existingKeySampleSize: 10_000
-      existingKeyPercentage: 50
+      existingKeyPercentage: 10
       existingIdPrefix: "100000000000000000"
       newIdPrefix: "2"
       newKeyRunId: 1
-      # Simulator applies the rate per client: 2 x 5K = 10K aggregate TPS.
-      ratePerSecond: 5_000
+      databaseConnectionName: dedup-postgres
+      databaseTableName: deduplicate
+      databaseVerificationTimeoutSeconds: 120
+      # Simulator applies the rate per client: 4 x 2.5K = 10K aggregate TPS.
+      ratePerSecond: 2_500

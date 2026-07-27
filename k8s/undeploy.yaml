@@ -24,13 +24,13 @@
       - primary-custom-config-cm
       - simu-dedup-user-code
     postgres_resource_names:
-      - { api: "batch/v1", kind: "Job", name: "postgres-dedup-seed" }
-      - { api: "batch/v1", kind: "Job", name: "postgres-dedup-schema" }
-      - { api: "apps/v1", kind: "StatefulSet", name: "postgres" }
-      - { api: "v1", kind: "Service", name: "postgres" }
-      - { api: "v1", kind: "ConfigMap", name: "postgres-dedup-seed" }
-      - { api: "v1", kind: "ConfigMap", name: "postgres-init-scripts" }
-      - { api: "v1", kind: "Secret", name: "postgres-auth" }
+      - { resource: "job", name: "postgres-dedup-seed" }
+      - { resource: "job", name: "postgres-dedup-schema" }
+      - { resource: "statefulset", name: "postgres" }
+      - { resource: "service", name: "postgres" }
+      - { resource: "configmap", name: "postgres-dedup-seed" }
+      - { resource: "configmap", name: "postgres-init-scripts" }
+      - { resource: "secret", name: "postgres-auth" }
     default_pvc_pattern: "(data-postgres|mancenter-storage-hazelcast-mc|hz-primary|hazelcast-mc)"
 
   tasks:
@@ -192,16 +192,21 @@
         - k8s
 
     - name: Delete Postgres resources
-      kubernetes.core.k8s:
-        state: absent
-        api_version: "{{ item.api }}"
-        kind: "{{ item.kind }}"
-        namespace: "{{ hazelcast_namespace }}"
-        name: "{{ item.name }}"
-        wait: true
+      ansible.builtin.command:
+        argv:
+          - kubectl
+          - delete
+          - "{{ item.resource }}"
+          - "{{ item.name }}"
+          - --namespace={{ hazelcast_namespace }}
+          - --ignore-not-found=true
+          - --wait=true
+          - --timeout=300s
       loop: "{{ postgres_resource_names }}"
       loop_control:
-        label: "{{ item.kind }}/{{ item.name }}"
+        label: "{{ item.resource }}/{{ item.name }}"
+      register: postgres_delete
+      changed_when: "'deleted' in (postgres_delete.stdout | default(''))"
       when: gke_cluster_exists
       tags:
         - undeploy
@@ -209,21 +214,26 @@
         - k8s
 
     - name: Delete remaining Hazelcast workloads and services
-      kubernetes.core.k8s:
-        state: absent
-        api_version: "{{ item.api }}"
-        kind: "{{ item.kind }}"
-        namespace: "{{ hazelcast_namespace }}"
-        name: "{{ item.name }}"
-        wait: true
+      ansible.builtin.command:
+        argv:
+          - kubectl
+          - delete
+          - "{{ item.resource }}"
+          - "{{ item.name }}"
+          - --namespace={{ hazelcast_namespace }}
+          - --ignore-not-found=true
+          - --wait=true
+          - --timeout=300s
       loop:
-        - { api: "apps/v1", kind: "StatefulSet", name: "hz-primary" }
-        - { api: "apps/v1", kind: "StatefulSet", name: "hz-primary-lite" }
-        - { api: "apps/v1", kind: "StatefulSet", name: "hazelcast-mc" }
-        - { api: "v1", kind: "Service", name: "hz-primary" }
-        - { api: "v1", kind: "Service", name: "hazelcast-mc" }
+        - { resource: "statefulset", name: "hz-primary" }
+        - { resource: "statefulset", name: "hz-primary-lite" }
+        - { resource: "statefulset", name: "hazelcast-mc" }
+        - { resource: "service", name: "hz-primary" }
+        - { resource: "service", name: "hazelcast-mc" }
       loop_control:
-        label: "{{ item.kind }}/{{ item.name }}"
+        label: "{{ item.resource }}/{{ item.name }}"
+      register: hazelcast_workload_delete
+      changed_when: "'deleted' in (hazelcast_workload_delete.stdout | default(''))"
       when: gke_cluster_exists
       tags:
         - undeploy
@@ -232,15 +242,19 @@
         - k8s
 
     - name: Delete Hazelcast secrets
-      kubernetes.core.k8s:
-        state: absent
-        api_version: v1
-        kind: Secret
-        namespace: "{{ hazelcast_namespace }}"
-        name: "{{ item }}"
+      ansible.builtin.command:
+        argv:
+          - kubectl
+          - delete
+          - secret
+          - "{{ item }}"
+          - --namespace={{ hazelcast_namespace }}
+          - --ignore-not-found=true
       loop: "{{ hazelcast_secret_names }}"
       loop_control:
         label: "{{ item }}"
+      register: hazelcast_secret_delete
+      changed_when: "'deleted' in (hazelcast_secret_delete.stdout | default(''))"
       when: gke_cluster_exists
       tags:
         - undeploy
@@ -249,15 +263,19 @@
         - k8s
 
     - name: Delete Hazelcast configmaps
-      kubernetes.core.k8s:
-        state: absent
-        api_version: v1
-        kind: ConfigMap
-        namespace: "{{ hazelcast_namespace }}"
-        name: "{{ item }}"
+      ansible.builtin.command:
+        argv:
+          - kubectl
+          - delete
+          - configmap
+          - "{{ item }}"
+          - --namespace={{ hazelcast_namespace }}
+          - --ignore-not-found=true
       loop: "{{ hazelcast_configmap_names }}"
       loop_control:
         label: "{{ item }}"
+      register: hazelcast_configmap_delete
+      changed_when: "'deleted' in (hazelcast_configmap_delete.stdout | default(''))"
       when: gke_cluster_exists
       tags:
         - undeploy
@@ -265,11 +283,15 @@
         - k8s
 
     - name: Gather PVCs in default namespace
-      kubernetes.core.k8s_info:
-        api_version: v1
-        kind: PersistentVolumeClaim
-        namespace: "{{ hazelcast_namespace }}"
+      ansible.builtin.command:
+        argv:
+          - kubectl
+          - get
+          - persistentvolumeclaim
+          - --namespace={{ hazelcast_namespace }}
+          - --output=name
       register: default_pvc_info
+      changed_when: false
       when: gke_cluster_exists
       tags:
         - undeploy
@@ -277,19 +299,23 @@
         - k8s
 
     - name: Delete PVCs created by this deployment
-      kubernetes.core.k8s:
-        state: absent
-        api_version: v1
-        kind: PersistentVolumeClaim
-        namespace: "{{ hazelcast_namespace }}"
-        name: "{{ item.metadata.name }}"
-        wait: true
-      loop: "{{ default_pvc_info.resources | default([]) }}"
+      ansible.builtin.command:
+        argv:
+          - kubectl
+          - delete
+          - "{{ item }}"
+          - --namespace={{ hazelcast_namespace }}
+          - --ignore-not-found=true
+          - --wait=true
+          - --timeout=300s
+      loop: "{{ default_pvc_info.stdout_lines | default([]) }}"
       loop_control:
-        label: "{{ item.metadata.name }}"
+        label: "{{ item }}"
+      register: pvc_delete
+      changed_when: "'deleted' in (pvc_delete.stdout | default(''))"
       when:
         - gke_cluster_exists
-        - item.metadata.name is search(default_pvc_pattern)
+        - item is search(default_pvc_pattern)
       tags:
         - undeploy
         - pvc
@@ -333,16 +359,20 @@
         - k8s
 
     - name: Delete Chaos Mesh RBAC
-      kubernetes.core.k8s:
-        state: absent
-        api_version: rbac.authorization.k8s.io/v1
-        kind: "{{ item.kind }}"
-        name: "{{ item.name }}"
+      ansible.builtin.command:
+        argv:
+          - kubectl
+          - delete
+          - "{{ item.resource }}"
+          - "{{ item.name }}"
+          - --ignore-not-found=true
       loop:
-        - { kind: "ClusterRoleBinding", name: "chaos-experimenter-binding" }
-        - { kind: "ClusterRole", name: "chaos-experimenter" }
+        - { resource: "clusterrolebinding", name: "chaos-experimenter-binding" }
+        - { resource: "clusterrole", name: "chaos-experimenter" }
       loop_control:
-        label: "{{ item.kind }}/{{ item.name }}"
+        label: "{{ item.resource }}/{{ item.name }}"
+      register: chaos_rbac_delete
+      changed_when: "'deleted' in (chaos_rbac_delete.stdout | default(''))"
       when: gke_cluster_exists
       tags:
         - undeploy
@@ -350,12 +380,17 @@
         - k8s
 
     - name: Delete Chaos Mesh namespace
-      kubernetes.core.k8s:
-        state: absent
-        api_version: v1
-        kind: Namespace
-        name: "{{ chaos_namespace }}"
-        wait: true
+      ansible.builtin.command:
+        argv:
+          - kubectl
+          - delete
+          - namespace
+          - "{{ chaos_namespace }}"
+          - --ignore-not-found=true
+          - --wait=true
+          - --timeout=300s
+      register: chaos_namespace_delete
+      changed_when: "'deleted' in (chaos_namespace_delete.stdout | default(''))"
       when: gke_cluster_exists
       tags:
         - undeploy
@@ -363,14 +398,22 @@
         - k8s
 
     - name: Delete VMs in the VPC network
-      gcp_compute_instance:
-        name: "{{ client_machine_name }}-{{ item }}"
-        project: "{{ project_id }}"
-        auth_kind: serviceaccount
-        service_account_file: "{{ credentials_file }}"
-        zone: "{{ zone }}"
-        state: absent
+      ansible.builtin.shell: |
+        set -o pipefail
+        gcloud compute instances delete {{ client_machine_name }}-{{ item }} \
+          --project {{ project_id }} \
+          --zone {{ zone }} \
+          --quiet
+      args:
+        executable: /bin/bash
       loop: "{{ range(1, client_machine_count + 1) | list }}"
+      register: delete_client_vm
+      changed_when: delete_client_vm.rc == 0
+      failed_when: >
+        (delete_client_vm.rc not in [0, 1]) or
+        (delete_client_vm.rc == 1 and
+         ('was not found' not in (((delete_client_vm.stderr | default('')) + (delete_client_vm.stdout | default(''))) | lower) and
+          'not found' not in (((delete_client_vm.stderr | default('')) + (delete_client_vm.stdout | default(''))) | lower)))
       tags:
         - undeploy
         - gke

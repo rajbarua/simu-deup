@@ -24,4 +24,7 @@
       existingIdPrefix: "100000000000000000"
       newIdPrefix: "2"
       newKeyRunId: 101
+      databaseConnectionName: dedup-postgres
+      databaseTableName: deduplicate
+      databaseVerificationTimeoutSeconds: 120
       ratePerSecond: 200
