@@ -1,9 +1,9 @@
 loadgenerators:
   hosts:
-    34.47.176.220:
+    34.93.30.245:
       ssh_user: ubuntu
       ssh_options: -i /Users/raj/.ssh/id_ed25519 -o StrictHostKeyChecking=no -o ConnectTimeout=60
-    34.180.42.31:
+    8.234.67.88:
       ssh_user: ubuntu
       ssh_options: -i /Users/raj/.ssh/id_ed25519 -o StrictHostKeyChecking=no -o ConnectTimeout=60
   vars:

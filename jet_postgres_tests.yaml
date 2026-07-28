@@ -1,9 +1,9 @@
-- name: jet-postgres-dedup-10k-no-chaos
+- name: jet-postgres-dedup-10k-chaos
   repetitions: 1
-  duration: 300s
+  duration: 120s
   driver: hazelcast-enterprise5
   version: maven=5.7.0
-  clients: 2
+  clients: 4
   members: 0
   loadgenerator_hosts: loadgenerators
   node_hosts: nodes
@@ -18,8 +18,8 @@
     --add-opens jdk.management/com.sun.management.internal=ALL-UNNAMED
   performance_monitor_interval_seconds: 1
   verify_enabled: true
-  warmup_seconds: 10
-  cooldown_seconds: 10
+  warmup_seconds: 60
+  cooldown_seconds: 0
   test:
     - class: com.hazelcast.simudedupe.tests.JetDeduplicationTest
       name: jetDeduplicate
@@ -37,10 +37,11 @@
       existingIdPrefix: "100000000000000000"
       newIdPrefix: "2"
       operationIdPrefix: "9"
-      newKeyRunId: 1
+      newKeyRunId: 4
       jobStartTimeoutSeconds: 600
       resultDrainTimeoutSeconds: 120
       resultRecoveryBatchSize: 1_000
-      resetTransientMaps: true
-      # Simulator applies the rate per client: 2 x 5K = 10K aggregate TPS.
-      ratePerSecond: 5_000
+      # Run IDs isolate verification. Clearing a previous 1.2M-operation run would itself flood the input journal.
+      resetTransientMaps: false
+      # Simulator applies the rate per client: 4 x 2.5K = 10K aggregate TPS.
+      ratePerSecond: 2_500

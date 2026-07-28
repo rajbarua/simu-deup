@@ -1,4 +1,4 @@
-- name: cpmap-dedup-10k
+- name: cpmap-dedup-10k-100K-snpsht
   repetitions: 1
   duration: 120s
   driver: hazelcast-enterprise5
@@ -35,6 +35,6 @@
       existingKeyPercentage: 50
       existingIdPrefix: "100000000000000000"
       newIdPrefix: "2"
-      newKeyRunId: 1
+      newKeyRunId: 3
       # Simulator applies the rate per client: 2 x 5K = 10K aggregate TPS.
       ratePerSecond: 2_500

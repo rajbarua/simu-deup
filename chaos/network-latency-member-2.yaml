@@ -1,0 +1,24 @@
+apiVersion: chaos-mesh.org/v1alpha1
+kind: NetworkChaos
+metadata:
+  name: hz-member-2-latency
+  namespace: chaos-mesh
+spec:
+  action: delay
+  mode: all
+  selector:
+    pods:
+      default:
+        - hz-primary-2
+  direction: both
+  target:
+    mode: all
+    selector:
+      pods:
+        default:
+          - hz-primary-0
+          - hz-primary-1
+  delay:
+    latency: 5ms
+    jitter: 0ms
+    correlation: "100"

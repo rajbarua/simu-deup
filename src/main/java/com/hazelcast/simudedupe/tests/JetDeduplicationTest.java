@@ -121,10 +121,11 @@ public class JetDeduplicationTest extends HazelcastTest {
     public int resultRecoveryBatchSize = 1_000;
 
     /**
-     * Clears only the transient Jet input/result maps before the run. The
-     * MapStore-backed deduplicate map and its PostgreSQL baseline are retained.
+     * Clears only the transient Jet input/result maps before the run. Leave disabled when reusing a running Jet job:
+     * clearing a large input map creates journal removal traffic and can overrun the journal. Run-specific operation-ID
+     * prefixes already isolate verification. Enable only after replacing the Jet job or on a known-empty input map.
      */
-    public boolean resetTransientMaps = true;
+    public boolean resetTransientMaps = false;
 
     private IMap<String, DedupRequest> inputMap;
     private IMap<String, DedupResult> resultMap;
@@ -181,8 +182,17 @@ public class JetDeduplicationTest extends HazelcastTest {
             inputMap.clear();
             resultMap.clear();
         }
-        if (inputMap.size() != 0 || resultMap.size() != 0) {
-            throw new IllegalStateException("Jet input/result maps must be empty before the benchmark");
+
+        long existingInputCount = inputMap.aggregate(
+                Aggregators.<Map.Entry<String, DedupRequest>>count(),
+                new OperationIdPrefixPredicate<DedupRequest>(runOperationPrefix));
+        long existingResultCount = resultMap.aggregate(
+                Aggregators.<Map.Entry<String, DedupResult>>count(),
+                new OperationIdPrefixPredicate<DedupResult>(runOperationPrefix));
+        if (existingInputCount != 0L || existingResultCount != 0L) {
+            throw new IllegalStateException("Jet run " + newKeyRunId + " already has transient data: input="
+                    + existingInputCount + ", result=" + existingResultCount
+                    + "; increment newKeyRunId before rerunning");
         }
     }
 

@@ -35,5 +35,6 @@
       jobStartTimeoutSeconds: 300
       resultDrainTimeoutSeconds: 120
       resultRecoveryBatchSize: 500
-      resetTransientMaps: true
+      # Run IDs isolate verification; retain other runs so their removal events cannot flood the input journal.
+      resetTransientMaps: false
       ratePerSecond: 200

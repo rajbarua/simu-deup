@@ -2,8 +2,10 @@ package com.hazelcast.simudedupe.jet;
 
 import com.hazelcast.core.Hazelcast;
 import com.hazelcast.core.HazelcastInstance;
+import com.hazelcast.jet.Job;
 import com.hazelcast.jet.config.JobConfig;
 import com.hazelcast.jet.config.ProcessingGuarantee;
+import com.hazelcast.jet.core.JobStatus;
 import com.hazelcast.jet.pipeline.EnterpriseSinks;
 import com.hazelcast.jet.pipeline.IMapExtension;
 import com.hazelcast.jet.pipeline.JournalInitialPosition;
@@ -11,6 +13,8 @@ import com.hazelcast.jet.pipeline.Pipeline;
 import com.hazelcast.jet.pipeline.Sinks;
 import com.hazelcast.jet.pipeline.Sources;
 import com.hazelcast.jet.pipeline.StreamStage;
+
+import java.util.concurrent.TimeUnit;
 
 import static com.hazelcast.simudedupe.jet.DedupResult.classify;
 
@@ -49,11 +53,35 @@ public final class JetDeduplicationJob {
         jobConfig.setSuspendOnFailure(true);
         jobConfig.setStoreMetricsAfterJobCompletion(true);
 
-        // Operator executes this main class through Hazelcast's member-side
-        // JAR service. Submission must return after creating the long-running
-        // job; join() is explicitly rejected by that service.
+        cancelRunningJob(hazelcast, jobName);
+
+        // The deployment runs this main class through hz-cli inside a member.
+        // Submission returns after creating the long-running job; Simulator
+        // separately waits for and verifies the RUNNING job.
         hazelcast.getJet().newJob(
                 pipeline(inputMapName, resultMapName, dedupMapName, maxConcurrentOps), jobConfig);
+    }
+
+    private static void cancelRunningJob(HazelcastInstance hazelcast, String jobName) {
+        for (Job job : hazelcast.getJet().getJobs(jobName)) {
+            JobStatus status = job.getStatus();
+            if (status == JobStatus.COMPLETED || status == JobStatus.FAILED) {
+                continue;
+            }
+            job.cancel();
+            long deadlineNanos = System.nanoTime() + TimeUnit.SECONDS.toNanos(60);
+            while (job.getStatus() != JobStatus.COMPLETED && job.getStatus() != JobStatus.FAILED) {
+                if (System.nanoTime() >= deadlineNanos) {
+                    throw new IllegalStateException("Timed out cancelling previous Jet job " + jobName);
+                }
+                try {
+                    Thread.sleep(200L);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    throw new IllegalStateException("Interrupted while cancelling previous Jet job " + jobName, e);
+                }
+            }
+        }
     }
 
     public static Pipeline pipeline(

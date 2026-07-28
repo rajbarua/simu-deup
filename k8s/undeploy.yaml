@@ -11,17 +11,8 @@
       - hz-primary
       - simu-dedup-local
     hazelcast_secret_names:
-      - hazelcast-agent-cert
       - hazelcast-license
-      - hazelcast-mc
-      - hazelcast-ssl
-      - hz-primary
-      - mapstore-deduplicate
-      - primary-custom-config
     hazelcast_configmap_names:
-      - hazelcast-keystore
-      - hz-primary-init
-      - primary-custom-config-cm
       - simu-dedup-user-code
     postgres_resource_names:
       - { resource: "job", name: "postgres-dedup-seed" }
@@ -31,7 +22,7 @@
       - { resource: "configmap", name: "postgres-dedup-seed" }
       - { resource: "configmap", name: "postgres-init-scripts" }
       - { resource: "secret", name: "postgres-auth" }
-    default_pvc_pattern: "(data-postgres|mancenter-storage-hazelcast-mc|hz-primary|hazelcast-mc)"
+    default_pvc_pattern: "(data-postgres|persistence-hz-primary|mancenter-storage-hz-primary-mancenter)"
 
   tasks:
     - name: Authorize access to Google Cloud with a service account
@@ -118,73 +109,18 @@
         - chaos
         - k8s
 
-    - name: Delete Hazelcast JetJob custom resources
+    - name: Uninstall Hazelcast Enterprise release
       ansible.builtin.shell: |
         set -o pipefail
-        kubectl delete jetjob.hazelcast.com --all \
-          -n {{ hazelcast_namespace }} \
-          --ignore-not-found=true \
-          --wait=true \
-          --timeout=300s 2>/dev/null || true
+        helm uninstall {{ hazelcast_helm_release_name }} -n {{ hazelcast_namespace }} --wait
       args:
         executable: /bin/bash
-      register: hz_jet_jobs_delete
-      changed_when: "'deleted' in (hz_jet_jobs_delete.stdout | default(''))"
-      when: gke_cluster_exists
-      tags:
-        - undeploy
-        - hz
-        - jet
-        - k8s
-
-    - name: Delete Hazelcast map custom resources
-      ansible.builtin.shell: |
-        set -o pipefail
-        kubectl delete map.hazelcast.com --all \
-          -n {{ hazelcast_namespace }} \
-          --ignore-not-found=true 2>/dev/null || true
-      args:
-        executable: /bin/bash
-      register: hz_maps_delete
-      changed_when: "'deleted' in (hz_maps_delete.stdout | default(''))"
-      when: gke_cluster_exists
-      tags:
-        - undeploy
-        - hz
-        - maps
-        - k8s
-
-    - name: Delete Hazelcast Management Center custom resource
-      ansible.builtin.shell: |
-        set -o pipefail
-        kubectl delete managementcenter.hazelcast.com hazelcast-mc \
-          -n {{ hazelcast_namespace }} \
-          --ignore-not-found=true \
-          --wait=true \
-          --timeout=300s 2>/dev/null || true
-      args:
-        executable: /bin/bash
-      register: hz_mc_delete
-      changed_when: "'deleted' in (hz_mc_delete.stdout | default(''))"
-      when: gke_cluster_exists
-      tags:
-        - undeploy
-        - hz
-        - mc
-        - k8s
-
-    - name: Delete Hazelcast cluster custom resource
-      ansible.builtin.shell: |
-        set -o pipefail
-        kubectl delete hazelcast.hazelcast.com hz-primary \
-          -n {{ hazelcast_namespace }} \
-          --ignore-not-found=true \
-          --wait=true \
-          --timeout=600s 2>/dev/null || true
-      args:
-        executable: /bin/bash
-      register: hz_cluster_delete
-      changed_when: "'deleted' in (hz_cluster_delete.stdout | default(''))"
+      register: uninstall_hazelcast
+      changed_when: uninstall_hazelcast.rc == 0
+      failed_when: >
+        (uninstall_hazelcast.rc not in [0, 1]) or
+        (uninstall_hazelcast.rc == 1 and
+         ('not found' not in (((uninstall_hazelcast.stderr | default('')) + (uninstall_hazelcast.stdout | default(''))) | lower)))
       when: gke_cluster_exists
       tags:
         - undeploy
@@ -226,10 +162,12 @@
           - --timeout=300s
       loop:
         - { resource: "statefulset", name: "hz-primary" }
-        - { resource: "statefulset", name: "hz-primary-lite" }
-        - { resource: "statefulset", name: "hazelcast-mc" }
+        - { resource: "statefulset", name: "hz-primary-mancenter" }
         - { resource: "service", name: "hz-primary" }
-        - { resource: "service", name: "hazelcast-mc" }
+        - { resource: "service", name: "hz-primary-0" }
+        - { resource: "service", name: "hz-primary-1" }
+        - { resource: "service", name: "hz-primary-2" }
+        - { resource: "service", name: "hz-primary-mancenter" }
       loop_control:
         label: "{{ item.resource }}/{{ item.name }}"
       register: hazelcast_workload_delete
@@ -319,25 +257,6 @@
       tags:
         - undeploy
         - pvc
-        - k8s
-
-    - name: Uninstall Hazelcast operator
-      ansible.builtin.shell: |
-        set -o pipefail
-        helm uninstall hzoperator -n {{ hazelcast_namespace }} --wait
-      args:
-        executable: /bin/bash
-      register: uninstall_hzoperator
-      changed_when: uninstall_hzoperator.rc == 0
-      failed_when: >
-        (uninstall_hzoperator.rc not in [0, 1]) or
-        (uninstall_hzoperator.rc == 1 and
-         ('not found' not in (((uninstall_hzoperator.stderr | default('')) + (uninstall_hzoperator.stdout | default(''))) | lower)))
-      when: gke_cluster_exists
-      tags:
-        - undeploy
-        - hz
-        - operator
         - k8s
 
     - name: Uninstall Chaos Mesh

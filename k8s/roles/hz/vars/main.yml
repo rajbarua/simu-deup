@@ -1,18 +1,18 @@
 ---
 # vars file for k8s/roles/hz
 primary_cluster_size: 3
-hazelcast_operator_chart_version: "5.18.0"
+hazelcast_helm_release_name: "hz-primary"
+hazelcast_helm_chart_version: "5.15.0"
 hazelcast_version: "5.7.0"
 hazelcast_mc_version: "5.11.0"
+hazelcast_kubectl_image: "alpine/k8s:1.33.4"
 hazelcast_license_secret_name: "hazelcast-license"
 hazelcast_license_file: "~/hazelcast/demo.license"
-hazelcast_custom_config_secret_name: "primary-custom-config"
 simu_dedup_user_code_jar: "{{ playbook_dir }}/../target/simu-dedup-tests-0.1.0-SNAPSHOT.jar"
 simu_dedup_user_code_config_map: "simu-dedup-user-code"
 simu_dedup_user_code_jar_name: "simu-dedup-tests.jar"
-simu_dedup_jet_jar_name: "{{ simu_dedup_user_code_config_map }}/{{ simu_dedup_user_code_jar_name }}"
+simu_dedup_member_jar_path: "/data/custom/{{ simu_dedup_user_code_jar_name }}"
 dedup_map_name: "deduplicate"
-dedup_mapstore_secret_name: "mapstore-deduplicate"
 dedup_postgres_data_connection: "dedup-postgres"
 dedup_table_name: "deduplicate"
 dedup_postgres_jdbc_url: "jdbc:postgresql://postgres.default.svc.cluster.local:5432/dedup"
@@ -23,11 +23,10 @@ dedup_mapstore_batch_size: "5000"
 jet_input_map_name: "deduplicate-jet-input"
 jet_result_map_name: "deduplicate-jet-results"
 jet_transient_map_ttl_seconds: "3600"
-jet_event_journal_capacity: "1000000"
+jet_event_journal_capacity: "3000000"
 jet_event_journal_ttl_seconds: "600"
-jet_job_resource_name: "simu-dedup-jet"
 jet_job_name_prefix: "simu-dedup-jet"
-jet_job_name: "{{ jet_job_name_prefix }}-{{ simu_dedup_user_code_jar_stat.stat.checksum[:8] }}"
+jet_job_name: "{{ jet_job_name_prefix }}"
 jet_job_main_class: "com.hazelcast.simudedupe.jet.JetDeduplicationJob"
 jet_max_concurrent_ops: "8"
 jet_snapshot_interval_millis: "10000"
@@ -35,11 +34,15 @@ jet_job_redeploy: false
 cp_data_load_timeout_seconds: "900"
 cp_persistence_storage_class: "premium-rwo"
 cp_persistence_storage_size: "50Gi"
+# Retain more Raft log entries between CP snapshots. At 10K aggregate TPS over
+# three CP groups, 100K commits per group is approximately a 30-second interval.
+cp_raft_snapshot_commit_interval: 100000
+# Set this to false to allow every CP member to hold leadership. When enabled,
+# only the member selected by cp_auto_step_down_member_ordinal steps down.
+cp_auto_step_down_enabled: false
+cp_auto_step_down_member_ordinal: 2
 hz_cluster_node_pool: "hazelcast-cluster"
 mc_cluster_node_pool: "management-center"
-self_signed_cert_key_file: "~/hazelcast/hazelcast.key"
-self_signed_cert_cert_file: "~/hazelcast/hazelcast.pem"
-self_signed_cert_keystore_file: "~/hazelcast/hazelcast-keystore.jks"
 hazelcast_cpu_request: "6"
 hazelcast_memory_request: "16Gi"
 hazelcast_memory_limit: "16Gi"

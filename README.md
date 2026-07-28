@@ -7,7 +7,7 @@ This repo is bootstrapped for GKE-based Hazelcast Simulator experiments. The cur
 - 2 client VMs in the same VPC
 - Hazelcast Platform `5.7.0`
 - Hazelcast Management Center `5.11.0`
-- Hazelcast Platform Operator chart `5.18.0`
+- Hazelcast Enterprise Helm chart `5.15.0`
 - Postgres `18.4`
 - Chaos Mesh `2.8.3`
 
@@ -19,7 +19,7 @@ The deduplication model is intentionally scoped to one payment-id domain per dep
 - `gcloud`, `kubectl`, and `helm`.
 - GCP credentials at `~/gcp/credentials.json`, or update `k8s/roles/gke/vars/main.yml`.
 - A public SSH key at `~/.ssh/id_ed25519.pub`, or set `SIMU_DEDUP_SSH_PUB_KEY`.
-- Postgres password in `SIMU_DEDUP_POSTGRES_PASSWORD` for AP/Jet deployments.
+- Postgres password in `SIMU_DEDUP_POSTGRES_PASSWORD` for every deployment.
 - Hazelcast Enterprise license at `~/hazelcast/demo.license`, or set `HAZELCAST_LICENSE_KEY`.
 - Hazelcast Simulator at `~/src/hazelcast-simulator`.
 
@@ -33,7 +33,7 @@ scripts/install-simulator-user-lib
 
 ## Deploy
 
-The same playbook provisions the cluster for AP, CP, and Jet tests. CP is enabled with persistence in every mode so switching workloads does not require a second cluster definition. Select the data path with `dedup_test_mode`:
+The same Helm release provisions Hazelcast, Management Center, PostgreSQL, and all data structures needed by the AP, CP, and Jet tests. The Hazelcast maps, MapStore, event journal, Compact serializers, JDBC data connection, and CP subsystem are all defined in the member YAML rendered by `k8s/roles/hz/templates/hazelcast-values.yml.j2`; there are no Hazelcast Operator custom resources or mode-dependent sections in that template. Before each member starts, an init container reads the PostgreSQL password from the `postgres-auth` Kubernetes Secret and writes it as a YAML-quoted value into the member-only configuration volume. Deployment fails if a password or CP leadership placeholder remains unresolved. `dedup_test_mode` identifies the intended workload and controls whether the long-running Jet job is submitted:
 
 ```bash
 cd ~/src/simu-dedup
@@ -43,10 +43,10 @@ ansible-playbook k8s/deploy.yaml \
   -e dedup_test_mode=ap \
   --tags="gke,client,hz,postgres,chaos"
 
-# CPMap only: no Postgres or MapStore resource
+# CPMap test; PostgreSQL and the AP/Jet map definitions remain available
 ansible-playbook k8s/deploy.yaml \
   -e dedup_test_mode=cp \
-  --tags="gke,client,hz,chaos"
+  --tags="gke,client,hz,postgres,chaos"
 
 # IMap + PostgreSQL + Jet
 ansible-playbook k8s/deploy.yaml \
@@ -64,7 +64,7 @@ After the playbook creates the client VMs:
 
 1. Get the public IPs for VMs named `raj-dedup-client-*` from GCP.
 2. Add those IPs under `loadgenerators.hosts` in `inventory.yaml`.
-3. Run `kubectl get svc hz-primary` and copy the `EXTERNAL-IP`.
+3. Run `kubectl get svc hz-primary-0` and copy the `EXTERNAL-IP`.
 4. Replace `127.0.0.1` in `client-hazelcast.xml` with that `EXTERNAL-IP`.
 
 ## Run Simulator
@@ -103,7 +103,7 @@ For IMap + PostgreSQL + Jet deduplication:
 perftest run jet_postgres_tests.yaml
 ```
 
-The deployment starts the long-running `simu-dedup-jet` job before Simulator. Simulator writes uniquely keyed requests to `deduplicate-jet-input`; its event journal feeds Jet, which runs asynchronous `putIfAbsent` operations against the same MapStore-backed `deduplicate` IMap used by the AP benchmark. Jet writes one decision per operation ID to `deduplicate-jet-results`.
+The deployment inspects the cluster and submits the long-running `simu-dedup-jet` job with `hz-cli` from `hz-primary-0` whenever a running job with that name is absent. This check is independent of whether Helm reports a configuration change, so rerunning the Jet deployment repairs a missing job. Set `jet_job_redeploy: true` to cancel and replace an already-running job. Simulator writes uniquely keyed requests to `deduplicate-jet-input`; its event journal feeds Jet, which runs asynchronous `putIfAbsent` operations against the same MapStore-backed `deduplicate` IMap used by the AP benchmark. Jet writes one decision per operation ID to `deduplicate-jet-results`.
 
 Payment IDs and operation IDs are separate 24-digit values. The payment ID is the business deduplication key. The operation ID correlates a submission with its result and lets AT_LEAST_ONCE replay be distinguished from a true duplicate:
 
@@ -117,7 +117,9 @@ The normal `submit` timestep measures input-map acknowledgement latency and TPS.
 
 The same global verification calls `flush()` on the MapStore-backed `deduplicate` IMap and then runs a count query on a Hazelcast member through the configured JDBC data connection. It counts active PostgreSQL rows under the current run's new-payment prefix and requires that number to equal `ACCEPTED + RETRY`; duplicate decisions must not create database rows. The prefix scope deliberately excludes the 1M baseline and data retained from other runs. Tune `dedupMapName`, `databaseConnectionName`, `databaseTableName`, and `databaseVerificationTimeoutSeconds` in `jet_postgres_tests.yaml` if the deployment names or expected flush time change.
 
-The job uses `AT_LEAST_ONCE`, a 10-second snapshot interval, `requireSnapshotBeforeProcessing`, and the Enterprise map-flush sink. The result-map decision is the end-to-end latency boundary; PostgreSQL durability is completed independently by the snapshot-driven flush. The default 1M-entry event journal provides about 100 seconds of history at 10K TPS; increase `jet_event_journal_capacity` before testing a longer recovery interval.
+The job uses `AT_LEAST_ONCE`, a 10-second snapshot interval, `requireSnapshotBeforeProcessing`, and the Enterprise map-flush sink. The result-map decision is the end-to-end latency boundary; PostgreSQL durability is completed independently by the snapshot-driven flush. The default 3M-entry event journal provides about 300 seconds of history at 10K TPS. Capacity is shared across all 271 partitions, so each partition receives roughly 11,070 slots. Increase `jet_event_journal_capacity` before testing a longer recovery interval.
+
+Keep `resetTransientMaps` disabled when running multiple Jet suites against the same long-running job. Operation IDs contain `newKeyRunId`, and verification scans only that run's prefix, so retained input and result entries from earlier runs do not affect correctness. Clearing a completed 1.2M-operation input map generates enough journal removal traffic to consume the recovery window. Increment `newKeyRunId` for every retained-data run; the test fails during preparation if that run ID already exists.
 
 ## Data Sizing
 
@@ -133,9 +135,13 @@ Hazelcast 5.7 serialization produced a 36-byte serialized 24-digit String key an
 
 The 4 GiB native-memory region therefore has substantial room for the 1M AP baseline and the default workload. CPMap defaults to a 100 MB maximum and has an absolute supported maximum of 2,000 MB, so the three-group default remains below the conservative 100 MB setting without raising it. On this three-member cluster every three-member CP group is replicated to the same three members; more groups split the CPMap size and distribute Raft leadership/work, but do not reduce aggregate per-member storage. Validate these estimates with member native-memory, heap, and CP persistence metrics during the first real run.
 
+CP leader auto step-down is controlled by `cp_auto_step_down_enabled` in `k8s/roles/hz/vars/main.yml` and is disabled by default. When enabled, the Helm chart starts an init container that copies the common member YAML to a writable volume and sets `auto-step-down-when-leader: true` only for the member selected by `cp_auto_step_down_member_ordinal`, which defaults to `hz-primary-2`; the other members use `false`. The selected member remains a voting CP member but transfers ordinary CP group leadership away after an election. Hazelcast permits this setting on only a minority of CP members, so a three-member CP cluster can mark at most one member this way. The setting does not apply to the METADATA CP group.
+
+The CP Raft snapshot threshold is controlled by `cp_raft_snapshot_commit_interval` and defaults to 100,000 commits. With 10K aggregate TPS distributed evenly over three CP groups, this produces a snapshot approximately every 30 seconds per group instead of approximately every three seconds with Hazelcast's 10,000-commit default. Increasing the threshold reduces snapshot frequency and persistence I/O at the cost of retaining more Raft log entries in heap between snapshots.
+
 Relevant Hazelcast guidance:
 
-- [CP Subsystem with the Platform Operator](https://docs.hazelcast.com/operator/5.18/cp-subsystem)
+- [Hazelcast Enterprise Helm chart](https://docs.hazelcast.com/hazelcast/5.7/kubernetes/helm-hazelcast-enterprise-chart)
 - [CP Subsystem configuration and CP groups](https://docs.hazelcast.com/hazelcast/5.7/cp-subsystem/configuration)
 - [CPMap configuration and size limits](https://docs.hazelcast.com/hazelcast/5.7/data-structures/cpmap)
 - [Native in-memory format](https://docs.hazelcast.com/hazelcast/5.7/data-structures/setting-data-format)

@@ -12,7 +12,6 @@
         - always
   roles:
     - gke
-    - role: postgres
-      when: dedup_test_mode != 'cp'
+    - postgres
     - hz
     - chaos

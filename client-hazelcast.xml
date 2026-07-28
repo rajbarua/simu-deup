@@ -9,7 +9,9 @@
 
     <network>
         <cluster-members>
-            <address>35.200.217.188</address>
+            <address>34.100.208.103</address>
+            <address>35.244.43.167</address>
+            <address>34.93.41.120</address>
         </cluster-members>
         <!-- write operations are idempotent, set redo to true -->
         <redo-operation>true</redo-operation>
