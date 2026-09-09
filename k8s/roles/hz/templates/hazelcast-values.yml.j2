@@ -64,6 +64,9 @@ hazelcast:
         capacity:
           unit: GIGABYTES
           value: {{ hazelcast_native_memory_size | regex_replace('Gi$', '') | int }}
+        min-block-size: {{ hazelcast_native_memory_min_block_size | int }}
+        page-size: {{ hazelcast_native_memory_page_size | int }}
+        metadata-space-percentage: {{ hazelcast_native_memory_metadata_space_percentage }}
       jet:
         enabled: true
         resource-upload-enabled: true
@@ -75,6 +78,8 @@ hazelcast:
             - serializer: com.hazelcast.simudedupe.jet.OperationIdPrefixPredicateCompactSerializer
             - serializer: com.hazelcast.simudedupe.jet.DedupResultStatsAggregatorCompactSerializer
             - serializer: com.hazelcast.simudedupe.jet.PostgresPrefixCountTaskCompactSerializer
+            - serializer: com.hazelcast.simudedupe.merchantprofile.MerchantProfileCompactSerializer
+            - serializer: com.hazelcast.simudedupe.merchantprofile.PostgresRunMarkerCountTaskCompactSerializer
       data-connection:
         {{ dedup_postgres_data_connection }}:
           type: JDBC
@@ -112,6 +117,22 @@ hazelcast:
           backup-count: 1
           in-memory-format: NATIVE
           time-to-live-seconds: {{ jet_transient_map_ttl_seconds | int }}
+        {{ merchant_profile_map_name }}:
+          backup-count: 1
+          in-memory-format: NATIVE
+          time-to-live-seconds: {{ merchant_profile_map_ttl_seconds | int }}
+          map-store:
+            enabled: true
+            class-name: com.hazelcast.simudedupe.store.MerchantProfileMapStore
+            initial-mode: LAZY
+            write-delay-seconds: 1
+            write-batch-size: {{ merchant_profile_mapstore_batch_size | int }}
+            write-coalescing: true
+            properties:
+              tableName: {{ merchant_profile_table_name }}
+              connectionName: {{ dedup_postgres_data_connection }}
+              batchSize: {{ merchant_profile_mapstore_batch_size | quote }}
+              ttlSeconds: {{ merchant_profile_map_ttl_seconds | quote }}
 
 jet:
   enabled: true
@@ -214,6 +235,8 @@ externalAccess:
   enabled: true
   service:
     type: LoadBalancer
+    annotations:
+      networking.gke.io/load-balancer-type: Internal
     labels:
       com.hazelcast/external-access: "true"
 

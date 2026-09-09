@@ -1,0 +1,15 @@
+apiVersion: chaos-mesh.org/v1alpha1
+kind: PodChaos
+metadata:
+  name: merchant-profile-member-failure
+  namespace: chaos-mesh
+spec:
+  action: pod-failure
+  mode: one
+  selector:
+    namespaces:
+      - default
+    pods:
+      default:
+        - hz-primary-2
+  duration: "30s"

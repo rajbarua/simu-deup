@@ -1,0 +1,39 @@
+- name: merchant-profile-10k-chaos
+  repetitions: 1
+  duration: 300s
+  driver: hazelcast-enterprise5
+  version: maven=5.7.0
+  loadgenerator_count: 2
+  node_count: 0
+  loadgenerator_hosts: loadgenerators
+  node_hosts: nodes
+  client_args: >
+    -Xms6g
+    -Xmx6g
+    --add-modules java.se
+    --add-exports java.base/jdk.internal.ref=ALL-UNNAMED
+    --add-opens java.base/java.lang=ALL-UNNAMED
+    --add-opens java.base/sun.nio.ch=ALL-UNNAMED
+    --add-opens java.management/sun.management=ALL-UNNAMED
+    --add-opens jdk.management/com.sun.management.internal=ALL-UNNAMED
+  performance_monitor_interval_seconds: 1
+  verify_enabled: true
+  warmup_seconds: 60
+  cooldown_seconds: 0
+  test:
+    - class: com.hazelcast.simudedupe.tests.MerchantProfileTest
+      name: merchantProfile
+      mapName: merchant-profile
+      threadCount: 40
+      keyDomain: 1_000_000
+      startId: 0
+      merchantIdPrefix: "300000000000000000"
+      valueCacheSize: 256
+      expectedSerializedValueSizeBytes: 10_240
+      # Run 1 was partially persisted by the terminated test; use a fresh marker for this rerun.
+      updateRunId: 5
+      databaseConnectionName: dedup-postgres
+      databaseTableName: merchant_profile
+      databaseVerificationTimeoutSeconds: 600
+      # Simulator applies this per client: 2 x 2.5K = 5K aggregate TPS.
+      ratePerSecond: 2_500

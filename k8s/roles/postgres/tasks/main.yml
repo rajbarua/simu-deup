@@ -23,6 +23,20 @@
   tags:
     - postgres
 
+- name: Validate merchant-profile seed configuration
+  ansible.builtin.assert:
+    that:
+      - merchant_profile_table_name is match('^[A-Za-z_][A-Za-z0-9_]*$')
+      - merchant_profile_seed_id_prefix is match('^[1-9][0-9]{17}$')
+      - (merchant_profile_seed_record_count | int) > 0
+      - (merchant_profile_seed_start_id | int) >= 0
+      - ((merchant_profile_seed_start_id | int) + (merchant_profile_seed_record_count | int)) <= 1000000
+      - (merchant_profile_payload_bytes | int) > 0
+      - (merchant_profile_map_ttl_seconds | int) > 0
+    fail_msg: Invalid merchant-profile seed settings. The ID prefix must be 18 numeric digits and the range must fit the six-digit suffix.
+  tags:
+    - postgres
+
 - name: Deploy Postgres for dedup persistence
   kubernetes.core.k8s:
     state: present
@@ -52,6 +66,13 @@
           CREATE TABLE IF NOT EXISTS {{ dedup_table_name }} (
             id VARCHAR(200) PRIMARY KEY,
             payload JSONB NOT NULL,
+            expirationTime BIGINT NOT NULL
+          );
+
+          CREATE TABLE IF NOT EXISTS {{ merchant_profile_table_name }} (
+            id VARCHAR(24) PRIMARY KEY,
+            payload JSONB NOT NULL,
+            updateRunId BIGINT NOT NULL,
             expirationTime BIGINT NOT NULL
           );
       ---
@@ -98,6 +119,65 @@
 
           ANALYZE {{ dedup_table_name }};
 
+          {% if dedup_test_mode == 'merchant_profile' %}
+          -- Build the 10 KiB domain values once inside PostgreSQL and expand them to the complete key range. No large
+          -- dataset crosses the public internet or a Simulator client. The byte array is incompressible-looking and is
+          -- represented as base64 in JSONB because the MapStore uses JsonUtil/Jackson for persistence.
+          WITH payload_bytes AS (
+            SELECT substring(
+              decode(string_agg(md5(chunk_number::text), '' ORDER BY chunk_number), 'hex')
+              FROM 1 FOR {{ merchant_profile_payload_bytes | int }}
+            ) AS value
+            FROM generate_series(
+              1,
+              CEIL({{ merchant_profile_payload_bytes | int }}::numeric / 16)::integer
+            ) AS chunk_number
+          ),
+          seed_parameters AS (
+            SELECT
+              (EXTRACT(epoch FROM statement_timestamp()) * 1000)::bigint AS seed_time_millis,
+              ({{ merchant_profile_map_ttl_seconds | int }}::bigint * 1000) AS ttl_millis,
+              jsonb_build_object(
+                'profileVersion', 1,
+                'updateRunId', 0,
+                'updatedAtEpochMillis', (EXTRACT(epoch FROM statement_timestamp()) * 1000)::bigint,
+                'active', true,
+                'merchantCategoryCode', '5411',
+                'settlementAccountToken', 'ACCT0000000000000000000000000000',
+                'merchantDisplayName', 'BANK MERCHANT 000000000000000000',
+                'terminalProfileId', 'TERM00000000000000000000',
+                'profilePayload', replace(encode(payload_bytes.value, 'base64'), E'\n', '')
+              ) AS profile
+            FROM payload_bytes
+          )
+          INSERT INTO {{ merchant_profile_table_name }} (id, payload, updateRunId, expirationTime)
+          SELECT
+            '{{ merchant_profile_seed_id_prefix }}' || lpad(
+              ({{ merchant_profile_seed_start_id | int }}::bigint + sequence_number)::text,
+              6,
+              '0'
+            ),
+            profile,
+            0,
+            seed_time_millis + ttl_millis
+          FROM seed_parameters
+          CROSS JOIN generate_series(
+            0::bigint,
+            ({{ merchant_profile_seed_record_count | int }}::bigint - 1)
+          ) AS sequence_number
+          ON CONFLICT (id) DO UPDATE SET
+            payload = EXCLUDED.payload,
+            updateRunId = EXCLUDED.updateRunId,
+            expirationTime = EXCLUDED.expirationTime;
+
+          CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_{{ merchant_profile_table_name }}_expirationTime
+            ON {{ merchant_profile_table_name }}(expirationTime);
+          CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_{{ merchant_profile_table_name }}_updateRunId
+            ON {{ merchant_profile_table_name }}(updateRunId);
+
+          ANALYZE {{ merchant_profile_table_name }};
+          {% endif %}
+
           DO $seed_verification$
           DECLARE
             missing_count bigint;
@@ -130,6 +210,37 @@
             END IF;
 
             RAISE NOTICE 'Verified {{ dedup_seed_record_count | int }} active dedup seed rows';
+
+            {% if dedup_test_mode == 'merchant_profile' %}
+            SELECT
+              count(*) FILTER (WHERE stored.id IS NULL),
+              count(*) FILTER (
+                WHERE stored.expirationTime <=
+                  (EXTRACT(epoch FROM current_timestamp) * 1000)::bigint
+                  OR stored.updateRunId <> 0
+              )
+            INTO missing_count, inactive_count
+            FROM generate_series(
+              0::bigint,
+              ({{ merchant_profile_seed_record_count | int }}::bigint - 1)
+            ) AS expected(sequence_number)
+            LEFT JOIN {{ merchant_profile_table_name }} AS stored
+              ON stored.id = '{{ merchant_profile_seed_id_prefix }}' ||
+                lpad(
+                  ({{ merchant_profile_seed_start_id | int }}::bigint + expected.sequence_number)::text,
+                  6,
+                  '0'
+                );
+
+            IF missing_count <> 0 THEN
+              RAISE EXCEPTION 'Expected all {{ merchant_profile_seed_record_count | int }} merchant-profile seed IDs, found % missing', missing_count;
+            END IF;
+            IF inactive_count <> 0 THEN
+              RAISE EXCEPTION 'Expected all merchant-profile seed IDs to be active with updateRunId zero, found % invalid', inactive_count;
+            END IF;
+
+            RAISE NOTICE 'Verified {{ merchant_profile_seed_record_count | int }} active merchant-profile seed rows';
+            {% endif %}
           END
           $seed_verification$;
       ---
@@ -289,7 +400,7 @@
         namespace: default
       spec:
         ttlSecondsAfterFinished: 3600
-        activeDeadlineSeconds: 900
+        activeDeadlineSeconds: 3600
         backoffLimit: 2
         template:
           metadata:
@@ -339,6 +450,6 @@
       type: Complete
       status: "True"
     wait_sleep: 5
-    wait_timeout: 900
+    wait_timeout: 3600
   tags:
     - postgres

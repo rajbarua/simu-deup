@@ -1,5 +1,13 @@
 ---
 # tasks file for k8s/roles/gke
+- name: Validate GCP project ID
+  ansible.builtin.assert:
+    that:
+      - project_id | trim | length > 0
+    fail_msg: "Set GCP_PROJECT_ID or pass -e project_id=your-gcp-project-id."
+  tags:
+    - always
+
 - name: Create Network for GKE Cluster
   gcp_compute_network:
     name: "{{ cluster_name }}-network"

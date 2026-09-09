@@ -24,6 +24,15 @@
       - { resource: "secret", name: "postgres-auth" }
     default_pvc_pattern: "(data-postgres|persistence-hz-primary|mancenter-storage-hz-primary-mancenter)"
 
+  pre_tasks:
+    - name: Validate GCP project ID
+      ansible.builtin.assert:
+        that:
+          - project_id | trim | length > 0
+        fail_msg: "Set GCP_PROJECT_ID or pass -e project_id=your-gcp-project-id."
+      tags:
+        - always
+
   tasks:
     - name: Authorize access to Google Cloud with a service account
       ansible.builtin.shell: |

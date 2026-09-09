@@ -6,8 +6,8 @@
     - name: Validate dedup test mode
       ansible.builtin.assert:
         that:
-          - dedup_test_mode in ['ap', 'cp', 'jet']
-        fail_msg: "dedup_test_mode must be ap, cp, or jet."
+          - dedup_test_mode in ['ap', 'cp', 'jet', 'merchant_profile']
+        fail_msg: "dedup_test_mode must be ap, cp, jet, or merchant_profile."
       tags:
         - always
   roles:

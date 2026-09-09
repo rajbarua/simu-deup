@@ -161,7 +161,19 @@ public abstract class MetadataAwareMapStore<V>
     public void deleteAll(Collection<String> keys) {
     }
 
-    private long expirationTime(MetadataAwareValue<V> value) {
+    protected final JdbcDataConnection jdbcDataConnection() {
+        return jdbcDataConnection;
+    }
+
+    protected final String tableName() {
+        return tableName;
+    }
+
+    protected final int batchSize() {
+        return batchSize;
+    }
+
+    protected final long expirationTime(MetadataAwareValue<V> value) {
         long expirationTime = value.getExpirationTime();
         if (expirationTime == MetadataAwareValue.NO_TIME_SET) {
             return System.currentTimeMillis() + fallbackTtlMillis;
@@ -206,6 +218,7 @@ public abstract class MetadataAwareMapStore<V>
         private final ResultSet resultSet;
         private boolean checked;
         private boolean hasNext;
+        private boolean closed;
 
         private AllKeysIterator() {
             try {
@@ -258,6 +271,10 @@ public abstract class MetadataAwareMapStore<V>
 
         @Override
         public void close() {
+            if (closed) {
+                return;
+            }
+            closed = true;
             closeQuietly(resultSet);
             closeQuietly(statement);
             closeQuietly(connection);

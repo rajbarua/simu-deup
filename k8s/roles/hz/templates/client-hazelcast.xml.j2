@@ -5,13 +5,13 @@
         xmlns="http://www.hazelcast.com/schema/client-config"
         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
 
-    <cluster-name>hz-primary</cluster-name>
+    <cluster-name>{{ hazelcast_helm_release_name }}</cluster-name>
 
     <network>
         <cluster-members>
-            <address>172.16.0.11</address>
-            <address>172.16.0.13</address>
-            <address>172.16.0.12</address>
+{% for address in hazelcast_member_service_addresses.results %}
+            <address>{{ address.stdout }}</address>
+{% endfor %}
         </cluster-members>
         <cluster-routing mode="ALL_MEMBERS"/>
         <redo-operation>true</redo-operation>

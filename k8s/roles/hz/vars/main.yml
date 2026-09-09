@@ -20,6 +20,10 @@ dedup_postgres_username: "dedup"
 dedup_postgres_password: "{{ lookup('env', 'SIMU_DEDUP_POSTGRES_PASSWORD') }}"
 dedup_map_ttl_seconds: "31622400"
 dedup_mapstore_batch_size: "5000"
+merchant_profile_map_name: "merchant-profile"
+merchant_profile_table_name: "merchant_profile"
+merchant_profile_map_ttl_seconds: "31622400"
+merchant_profile_mapstore_batch_size: "1000"
 jet_input_map_name: "deduplicate-jet-input"
 jet_result_map_name: "deduplicate-jet-results"
 jet_transient_map_ttl_seconds: "3600"
@@ -44,10 +48,16 @@ cp_auto_step_down_member_ordinal: 2
 hz_cluster_node_pool: "hazelcast-cluster"
 mc_cluster_node_pool: "management-center"
 hazelcast_cpu_request: "6"
-hazelcast_memory_request: "16Gi"
-hazelcast_memory_limit: "16Gi"
+hazelcast_memory_request: "36Gi"
+hazelcast_memory_limit: "36Gi"
 hazelcast_jvm_heap: "8g"
-hazelcast_native_memory_size: "4Gi"
+hazelcast_native_memory_size: "20Gi"
+# POOLED uses buddy allocation. These supported defaults are explicit so the
+# allocator can be tuned after observing native-memory metrics, but a 10 KiB
+# value will still occupy the next power-of-two block (16 KiB).
+hazelcast_native_memory_min_block_size: 16
+hazelcast_native_memory_page_size: 4194304
+hazelcast_native_memory_metadata_space_percentage: 12.5
 management_center_cpu_request: "2"
 management_center_memory_request: "8Gi"
 management_center_jvm_heap: "6g"

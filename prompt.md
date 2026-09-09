@@ -1,10 +1,10 @@
 # Simulate Bank Deduplication Use Cases
 
-I want to try provide some experimental results to banks for their deduplication use cases. Deduplication is basically the deduplication of payments typically via their payment id. You can find more on this in [AXIS_Bank_Hazelcast_Proposal.pptx](AXIS_Bank_Hazelcast_Proposal.pptx).
+I want to try provide some experimental results to banks for their deduplication use cases. Deduplication is basically the deduplication of payments typically via their payment id.
 
 ## Goal
 
-Create GCP cluster and run experiments on three types of deduplication architectures - Hazelcast IMap + Postgres, Hazelcast IMap + Jet + Postgres and CP Map. Using Hazelcast Simulator to execute tests and generate the results so that we can compare. Also do some more tests with adding errors using chaos mesh. With chaos mesh we can simulate 3 DC stretched cluster setup and introduce latency with some jitter too to simulate inter AZ or inter DC type network.
+Create GCP cluster and run experiments on Hazelcast IMap + Postgres deduplication, Hazelcast IMap + Jet + Postgres deduplication, CP Map deduplication, and the Bank UPI merchant-profile workload. Use Hazelcast Simulator to execute tests and generate comparable results. Also do some tests with errors added by Chaos Mesh. With Chaos Mesh we can simulate a three-DC stretched cluster and introduce latency with jitter to model inter-AZ or inter-DC networks.
 
 ## Setup
 
@@ -22,7 +22,7 @@ The Simulator project is at /Users/raj/src/hazelcast-simulator for reference.
 
 ### Number of payments
 
-As per google search, AXIS bank does about 40 million payments per day across all payment rails. UPI itself accounts for about 30 million payments per day. Credit cards may be around 3 million, high-value payments about 1 million, and others about 0.5 million. We can assume 40m in total per day. UPI does about 2k payments per second.
+For a representative bank, assume 40 million payments per day across all payment rails, including 30 million UPI payments. Use 2,000 UPI payments per second as an illustrative busy-period rate. These are synthetic sizing assumptions, not figures attributed to a specific bank.
 
 Deduplication is scoped to a single payment-id domain. The same DB table and IMap should not store payment IDs from more than one payment rail or deduplication domain. In practice, each domain would have its own table and IMap, and likely its own database and Hazelcast deployment. Therefore this project models one deduplication domain at a time and uses plain payment IDs as keys, with no domain discriminator.
 
@@ -40,7 +40,13 @@ For the current experiment, test against 1,000,000 existing 24-digit payment IDs
 
 Once data load is done, we should have 5 min tests putIfAbsent. As of now no chaos, just simple tests. Throughput should be limited to 10K
 
-The AP map uses Hazelcast native memory. The current three-member sizing is an 8 GiB JVM heap plus a 4 GiB pooled native-memory region inside a 16 GiB member container. For the 1M baseline with one backup, including conservative serialized-data, allocator, and record-metadata allowances, this is well within the available native-memory capacity.
+The AP maps use Hazelcast native memory. The current three-member sizing is an 8 GiB JVM heap plus a 20 GiB pooled native-memory region inside a 36 GiB member container on `c2-standard-16` nodes. The larger sizing supports the separate million-entry, exact-10-KiB merchant-profile workload with one backup and a temporary member outage; the original deduplication baseline is much smaller.
+
+### Bank UPI merchant profiles (implemented; cluster run pending)
+
+The separate `merchant-profile` IMap is backed by PostgreSQL with a one-second asynchronous write-behind MapStore. In `dedup_test_mode=merchant_profile`, a Kubernetes Job generates one million 24-digit merchant keys and their large JSONB values inside the GKE VPC. The test calls `loadAll(true)` before warmup so neither seed generation nor initial loading is measured and no large dataset is uploaded from outside the VPC.
+
+Each Compact value is exactly 10,240 bytes excluding its key, enforced by a unit test. Simulator clients create a small cache of immutable sample values during setup; measured writes choose from this cache so object construction is excluded, while Compact serialization and network transfer remain included. The workload runs at 5K aggregate TPS with separate 70% read and 30% update timesteps, a 60-second warmup, and a five-minute measurement. Global verification checks the one-million-entry IMap size, flushes write-behind, and compares distinct current-run updates in the IMap and PostgreSQL. An optional Chaos Mesh manifest fails one member pod for 30 seconds during the measured interval.
 
 ### Deduplication via CPMap (initial no-chaos test done)
 

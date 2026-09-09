@@ -1,0 +1,157 @@
+<mxfile>
+  <diagram id="autolayout" name="Page-1">
+    <mxGraphModel dx="800" dy="600" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="850" pageHeight="1100" math="0" shadow="0">
+      <root>
+        <mxCell id="0"/>
+        <mxCell id="1" parent="0"/>
+        <mxCell id="group_0" value="GCP VPC · asia-south1" style="rounded=0;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#6c8ebf;fontColor=#6c8ebf;verticalAlign=top;fontStyle=2;dashed=1;" vertex="1" parent="1">
+          <mxGeometry x="4" y="12" width="1322" height="1129" as="geometry"/>
+        </mxCell>
+        <mxCell id="group_1" value="GKE · raj-dedup-test" style="rounded=0;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#6c8ebf;fontColor=#6c8ebf;verticalAlign=top;fontStyle=2;dashed=1;" vertex="1" parent="group_0">
+          <mxGeometry x="24" y="310" width="1274" height="795" as="geometry"/>
+        </mxCell>
+        <mxCell id="group_2" value="Simulator load-generator VMs" style="rounded=0;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#6c8ebf;fontColor=#6c8ebf;verticalAlign=top;fontStyle=2;dashed=1;" vertex="1" parent="group_0">
+          <mxGeometry x="232" y="24" width="528" height="278" as="geometry"/>
+        </mxCell>
+        <mxCell id="group_3" value="Management Center node pool" style="rounded=0;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#6c8ebf;fontColor=#6c8ebf;verticalAlign=top;fontStyle=2;dashed=1;" vertex="1" parent="group_1">
+          <mxGeometry x="58" y="24" width="278" height="138" as="geometry"/>
+        </mxCell>
+        <mxCell id="group_4" value="Operations" style="rounded=0;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#6c8ebf;fontColor=#6c8ebf;verticalAlign=top;fontStyle=2;dashed=1;" vertex="1" parent="group_1">
+          <mxGeometry x="358" y="24" width="278" height="138" as="geometry"/>
+        </mxCell>
+        <mxCell id="group_5" value="Private member routing" style="rounded=0;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#6c8ebf;fontColor=#6c8ebf;verticalAlign=top;fontStyle=2;dashed=1;" vertex="1" parent="group_1">
+          <mxGeometry x="658" y="24" width="298" height="138" as="geometry"/>
+        </mxCell>
+        <mxCell id="group_6" value="Workload node pool · 4 × c2-standard-16" style="rounded=0;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#6c8ebf;fontColor=#6c8ebf;verticalAlign=top;fontStyle=2;dashed=1;" vertex="1" parent="group_1">
+          <mxGeometry x="24" y="170" width="1226" height="601" as="geometry"/>
+        </mxCell>
+        <mxCell id="group_7" value="Hazelcast StatefulSet · 3 members" style="rounded=0;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#6c8ebf;fontColor=#6c8ebf;verticalAlign=top;fontStyle=2;dashed=1;" vertex="1" parent="group_6">
+          <mxGeometry x="24" y="24" width="868" height="283" as="geometry"/>
+        </mxCell>
+        <mxCell id="group_8" value="PostgreSQL node" style="rounded=0;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#6c8ebf;fontColor=#6c8ebf;verticalAlign=top;fontStyle=2;dashed=1;" vertex="1" parent="group_6">
+          <mxGeometry x="914" y="164" width="288" height="413" as="geometry"/>
+        </mxCell>
+        <mxCell id="coordinator" value="Developer workstation
+Ansible + Simulator coordinator" style="rounded=1;whiteSpace=wrap;html=1;dashed=1;fillColor=#f5f5f5;strokeColor=#666666;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="1350" y="80" width="220" height="70" as="geometry"/>
+        </mxCell>
+        <mxCell id="clients" value="2 × Simulator Java clients
+c2-standard-4
+5,000 aggregate ops/s" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontStyle=1;" vertex="1" parent="group_2">
+          <mxGeometry x="284" y="164" width="220" height="90" as="geometry"/>
+        </mxCell>
+        <mxCell id="profile" value="UPI merchant-profile workload
+1M × 24-digit keys
+10,240-byte Compact values
+70% get · 30% set" style="shape=note;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;" vertex="1" parent="group_2">
+          <mxGeometry x="274" y="24" width="230" height="110" as="geometry"/>
+        </mxCell>
+        <mxCell id="verify" value="Global verification
+IMap size + updateRunId count
+flush() + PostgreSQL count" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontStyle=1;" vertex="1" parent="group_2">
+          <mxGeometry x="24" y="34" width="230" height="90" as="geometry"/>
+        </mxCell>
+        <mxCell id="member_lbs" value="3 × internal per-member LBs
+hz-primary-0 / 1 / 2
+Java routing: ALL_MEMBERS" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;fontStyle=1;" vertex="1" parent="group_5">
+          <mxGeometry x="24" y="24" width="250" height="90" as="geometry"/>
+        </mxCell>
+        <mxCell id="hz0" value="hz-primary-0
+Hazelcast 5.7 Enterprise
+36 GiB pod · 8 GiB heap · 20 GiB POOLED native" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontStyle=1;" vertex="1" parent="group_7">
+          <mxGeometry x="24" y="24" width="260" height="95" as="geometry"/>
+        </mxCell>
+        <mxCell id="hz1" value="hz-primary-1
+Hazelcast 5.7 Enterprise
+36 GiB pod · 8 GiB heap · 20 GiB POOLED native" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontStyle=1;" vertex="1" parent="group_7">
+          <mxGeometry x="584" y="24" width="260" height="95" as="geometry"/>
+        </mxCell>
+        <mxCell id="hz2" value="hz-primary-2
+Hazelcast 5.7 Enterprise
+36 GiB pod · 8 GiB heap · 20 GiB POOLED native" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontStyle=1;" vertex="1" parent="group_7">
+          <mxGeometry x="304" y="24" width="260" height="95" as="geometry"/>
+        </mxCell>
+        <mxCell id="imap" value="merchant-profile IMap
+NATIVE · backup-count 1
+LAZY MapStore · TTL 366 days" style="shape=cylinder3;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontStyle=1;" vertex="1" parent="group_7">
+          <mxGeometry x="314" y="154" width="250" height="105" as="geometry"/>
+        </mxCell>
+        <mxCell id="seed_job" value="In-cluster seed Job
+Generates 1M profiles
+No dataset upload or GCS" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;fontStyle=1;" vertex="1" parent="group_8">
+          <mxGeometry x="34" y="24" width="220" height="85" as="geometry"/>
+        </mxCell>
+        <mxCell id="postgres" value="PostgreSQL 18.4
+merchant_profile
+1M JSONB rows · 24 GiB pod" style="shape=cylinder3;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontStyle=1;" vertex="1" parent="group_8">
+          <mxGeometry x="24" y="154" width="240" height="110" as="geometry"/>
+        </mxCell>
+        <mxCell id="pg_disk" value="100 GiB Premium RWO
+SSD Persistent Disk" style="shape=cylinder3;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;fontStyle=1;" vertex="1" parent="group_8">
+          <mxGeometry x="44" y="304" width="200" height="85" as="geometry"/>
+        </mxCell>
+        <mxCell id="management_center" value="Management Center 5.11
+c2-standard-4 node
+6 GiB heap · 1 GiB PVC" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontStyle=1;" vertex="1" parent="group_3">
+          <mxGeometry x="24" y="24" width="230" height="90" as="geometry"/>
+        </mxCell>
+        <mxCell id="chaos_mesh" value="Chaos Mesh 2.8.3
+Optional PodChaos
+hz-primary-2 failure · 30s" style="rounded=1;whiteSpace=wrap;html=1;dashed=1;fillColor=#f8cecc;strokeColor=#b85450;fontStyle=1;" vertex="1" parent="group_4">
+          <mxGeometry x="24" y="24" width="230" height="90" as="geometry"/>
+        </mxCell>
+        <mxCell id="e0" value="SSH orchestration + test artifacts" style="html=1;rounded=0;" edge="1" parent="1" source="coordinator" target="clients">
+          <mxGeometry relative="1" as="geometry"><Array as="points"><mxPoint x="1460" y="190"/><mxPoint x="1460" y="250"/><mxPoint x="1460" y="250"/><mxPoint x="1460" y="250"/><mxPoint x="750" y="250"/></Array></mxGeometry>
+        </mxCell>
+        <mxCell id="e1" value="prebuilt cache: 256 values/client" style="html=1;rounded=0;" edge="1" parent="1" source="profile" target="clients">
+          <mxGeometry relative="1" as="geometry"><Array as="points"><mxPoint x="630" y="170"/><mxPoint x="630" y="190"/></Array></mxGeometry>
+        </mxCell>
+        <mxCell id="e2" value="Hazelcast binary protocol · private VPC" style="html=1;rounded=0;" edge="1" parent="1" source="clients" target="member_lbs">
+          <mxGeometry relative="1" as="geometry"><Array as="points"><mxPoint x="730" y="290"/><mxPoint x="730" y="360"/></Array></mxGeometry>
+        </mxCell>
+        <mxCell id="e3" value="direct member route" style="html=1;rounded=0;" edge="1" parent="1" source="member_lbs" target="hz0">
+          <mxGeometry relative="1" as="geometry"><Array as="points"><mxPoint x="780" y="480"/><mxPoint x="780" y="500"/><mxPoint x="780" y="500"/><mxPoint x="780" y="500"/><mxPoint x="350" y="500"/><mxPoint x="350" y="500"/><mxPoint x="350" y="500"/><mxPoint x="350" y="530"/></Array></mxGeometry>
+        </mxCell>
+        <mxCell id="e4" value="direct member route" style="html=1;rounded=0;" edge="1" parent="1" source="member_lbs" target="hz1">
+          <mxGeometry relative="1" as="geometry"><Array as="points"><mxPoint x="850" y="460"/><mxPoint x="850" y="530"/></Array></mxGeometry>
+        </mxCell>
+        <mxCell id="e5" value="direct member route" style="html=1;rounded=0;" edge="1" parent="1" source="member_lbs" target="hz2">
+          <mxGeometry relative="1" as="geometry"><Array as="points"><mxPoint x="680" y="420"/><mxPoint x="650" y="420"/><mxPoint x="650" y="420"/><mxPoint x="650" y="420"/><mxPoint x="650" y="590"/><mxPoint x="650" y="590"/><mxPoint x="650" y="590"/><mxPoint x="650" y="590"/></Array></mxGeometry>
+        </mxCell>
+        <mxCell id="e6" value="owned partitions" style="html=1;rounded=0;" edge="1" parent="1" source="hz0" target="imap">
+          <mxGeometry relative="1" as="geometry"><Array as="points"><mxPoint x="230" y="680"/><mxPoint x="230" y="740"/><mxPoint x="230" y="740"/><mxPoint x="230" y="740"/><mxPoint x="380" y="740"/></Array></mxGeometry>
+        </mxCell>
+        <mxCell id="e7" value="owned partitions" style="html=1;rounded=0;" edge="1" parent="1" source="hz1" target="imap">
+          <mxGeometry relative="1" as="geometry"><Array as="points"><mxPoint x="790" y="660"/><mxPoint x="790" y="680"/><mxPoint x="790" y="680"/><mxPoint x="790" y="680"/><mxPoint x="650" y="680"/></Array></mxGeometry>
+        </mxCell>
+        <mxCell id="e8" value="owned partitions" style="html=1;rounded=0;" edge="1" parent="1" source="hz2" target="imap">
+          <mxGeometry relative="1" as="geometry"><Array as="points"><mxPoint x="510" y="640"/><mxPoint x="510" y="660"/></Array></mxGeometry>
+        </mxCell>
+        <mxCell id="e9" value="bulk INSERT inside VPC" style="html=1;rounded=0;" edge="1" parent="1" source="seed_job" target="postgres">
+          <mxGeometry relative="1" as="geometry"><Array as="points"><mxPoint x="1110" y="770"/><mxPoint x="1110" y="800"/></Array></mxGeometry>
+        </mxCell>
+        <mxCell id="e10" value="@Prepare loadAll(true) before warmup" style="html=1;rounded=0;" edge="1" parent="1" source="postgres" target="imap">
+          <mxGeometry relative="1" as="geometry"><Array as="points"><mxPoint x="1000" y="790"/><mxPoint x="1000" y="770"/><mxPoint x="1000" y="770"/><mxPoint x="1000" y="770"/><mxPoint x="650" y="770"/></Array></mxGeometry>
+        </mxCell>
+        <mxCell id="e11" value="async MapStore · 1s · batch 1000 · coalescing" style="html=1;rounded=0;" edge="1" parent="1" source="imap" target="postgres">
+          <mxGeometry relative="1" as="geometry"><Array as="points"><mxPoint x="780" y="770"/><mxPoint x="1000" y="770"/><mxPoint x="1000" y="770"/><mxPoint x="1000" y="770"/><mxPoint x="1000" y="800"/></Array></mxGeometry>
+        </mxCell>
+        <mxCell id="e12" value="persistent storage" style="html=1;rounded=0;" edge="1" parent="1" source="postgres" target="pg_disk">
+          <mxGeometry relative="1" as="geometry"><Array as="points"><mxPoint x="1110" y="920"/><mxPoint x="1110" y="950"/></Array></mxGeometry>
+        </mxCell>
+        <mxCell id="e13" value="size + updateRunId predicate count" style="html=1;rounded=0;" edge="1" parent="1" source="verify" target="imap">
+          <mxGeometry relative="1" as="geometry"><Array as="points"><mxPoint x="380" y="300"/><mxPoint x="380" y="710"/><mxPoint x="380" y="710"/><mxPoint x="380" y="710"/><mxPoint x="380" y="710"/></Array></mxGeometry>
+        </mxCell>
+        <mxCell id="e14" value="flush then database marker count" style="html=1;rounded=0;" edge="1" parent="1" source="verify" target="postgres">
+          <mxGeometry relative="1" as="geometry"><Array as="points"><mxPoint x="370" y="320"/><mxPoint x="370" y="870"/><mxPoint x="370" y="870"/><mxPoint x="370" y="870"/><mxPoint x="980" y="870"/></Array></mxGeometry>
+        </mxCell>
+        <mxCell id="e15" value="monitor cluster" style="html=1;rounded=0;" edge="1" parent="1" source="management_center" target="hz0">
+          <mxGeometry relative="1" as="geometry"><Array as="points"><mxPoint x="220" y="460"/><mxPoint x="220" y="530"/></Array></mxGeometry>
+        </mxCell>
+        <mxCell id="e16" value="optional member-process failure" style="html=1;rounded=0;" edge="1" parent="1" source="chaos_mesh" target="hz2">
+          <mxGeometry relative="1" as="geometry"><Array as="points"><mxPoint x="530" y="460"/><mxPoint x="530" y="530"/></Array></mxGeometry>
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

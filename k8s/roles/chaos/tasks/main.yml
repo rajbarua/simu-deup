@@ -1,4 +1,12 @@
 ---
+- name: Validate Chaos Mesh access identity
+  ansible.builtin.assert:
+    that:
+      - user_name | trim | length > 0
+    fail_msg: "Set GCP_SERVICE_ACCOUNT_EMAIL or pass -e user_name=your-access-identity."
+  tags:
+    - always
+
 - name: Add chaos helm repository
   kubernetes.core.helm_repository:
     name: chaos-mesh

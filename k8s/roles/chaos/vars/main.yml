@@ -1,3 +1,3 @@
 ---
-user_name: "rajbarua-gke@solution-architects-415712.iam.gserviceaccount.com"
+user_name: "{{ lookup('env', 'GCP_SERVICE_ACCOUNT_EMAIL') }}"
 chaos_mesh_chart_version: "2.8.3"

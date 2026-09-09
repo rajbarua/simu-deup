@@ -210,6 +210,33 @@
     - hz-primary
     - hz-platform
 
+- name: Read Hazelcast member internal load balancer addresses
+  ansible.builtin.command:
+    argv:
+      - kubectl
+      - get
+      - service
+      - "{{ hazelcast_helm_release_name }}-{{ item }}"
+      - --namespace=default
+      - --output=jsonpath={.status.loadBalancer.ingress[0].ip}
+  loop: "{{ range(0, primary_cluster_size | int) | list }}"
+  register: hazelcast_member_service_addresses
+  changed_when: false
+  tags:
+    - hz
+    - hz-primary
+    - hz-platform
+
+- name: Render Simulator client configuration with all member addresses
+  ansible.builtin.template:
+    src: client-hazelcast.xml.j2
+    dest: "{{ playbook_dir }}/../client-hazelcast.xml"
+    mode: "0644"
+  tags:
+    - hz
+    - hz-primary
+    - hz-platform
+
 ######################
 ## Jet
 ######################
